@@ -28,8 +28,11 @@ targets:
     sources:
       - path: Sources
     resources:
-      # 明确指向 xcassets，xcodegen 才会按 Asset Catalog 编译（否则只是个普通文件夹）
+      # 1) Asset Catalog：理想情况下 Xcode 会把它编译成 Assets.car
       - path: Resources/Assets.xcassets
+      # 2) 兜底：直接把 PNG 拷进 bundle 根目录，配合 Info.plist 的 CFBundleIconFiles。
+      #    某些 xcodegen / Xcode 组合下 catalog 不会被编译，图标就丢了，这层保证一定有图标。
+      - path: Resources/AppIcon.appiconset
     info:
       path: Info.plist
       properties:

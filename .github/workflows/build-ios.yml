@@ -75,6 +75,15 @@ jobs:
           zip -qry LifeBook.ipa Payload
           ls -lh LifeBook.ipa
 
+      - name: Inspect app bundle
+        run: |
+          cd ios/build
+          echo "=== App 包内容 ==="
+          find Payload/*.app -maxdepth 1 -exec basename {} \; || true
+          echo "=== 是否有图标 ==="
+          ls Payload/*.app/Assets.car 2>/dev/null && echo "Assets.car 存在" || echo "Assets.car 缺失（靠 Info.plist 的 CFBundleIconFiles 兜底）"
+          ls Payload/*.app/*.png 2>/dev/null | head -5 || true
+
       - name: Upload ipa artifact
         uses: actions/upload-artifact@v4
         with:
