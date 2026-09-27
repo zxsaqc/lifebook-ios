@@ -36,6 +36,12 @@ import {
 import { ShareError, buildShare, peekShare, readShare, slimRecords } from "./share.js";
 import { SyncError } from "./sync.js";
 import {
+  IMPORT_SOURCES,
+  MODULES,
+  analyzeInput,
+  describeRecord,
+} from "./importers.js";
+import {
   deleteSyncConfig,
   syncAdopt,
   syncConfigure,
@@ -58,6 +64,7 @@ const ERROR_MESSAGES = {
   duplicate_entry: "已存在相同记录",
   offline: "本机数据不可用，请重试",
   secure_context_required: "当前环境不支持加密存储，请通过 App 或本机地址打开",
+  empty_import: "没有从内容里认出可导入的记录，请检查格式或手动指定模块",
   // 云同步
   not_configured: "还没有配置同步服务器",
   bad_config: "服务器地址或账号格式不对，请检查",
@@ -1064,6 +1071,14 @@ export const api = {
   shareCreate: wrap(async (payload = {}) => shareCreate(payload)),
   sharePeek: wrap(async (text) => peekShare(text)),
   shareOpen: wrap(async (password, text) => readShare(password, text)),
+
+  /* -------- 导入中转（把别处导出的数据搬进来）-------- */
+  importSources: wrap(async () => ({
+    sources: IMPORT_SOURCES,
+    modules: Object.entries(MODULES).map(([key, label]) => ({ key, label })),
+  })),
+  importScan: wrap(async (payload = {}) => importScan(payload)),
+  importApply: wrap(async (payload = {}) => importApply(payload)),
 };
 
 /** 可以对外分享的类别。账号清单会**自动去掉口令和两步验证密钥**。 */
@@ -1164,6 +1179,356 @@ function mediaOut(m) {
     tags: m.tags || [],
     created_at: m.created_at,
     updated_at: m.updated_at,
+  };
+}
+
+/* ==================== 导入中转 ==================== */
+
+// 导入是「把用户别处的数据搬过来」，有两条硬要求：
+// 1. 同一份文件导入两次不能变成两份数据 —— 靠指纹去重，不靠用户自己记得；
+// 2. 导入进来的历史账单也要有 AI 分类。否则用户看到几百条「其他」，
+//    第一反应是这软件不好用，转头就走 —— 恰恰是推广最怕的结果。
+
+/** 去重指纹：一条记录在不同来源里都稳定可比的那几个特征。 */
+function dedupeKey(record) {
+  const norm = (v) => String(v ?? "").trim().toLowerCase().replace(/\s+/g, "");
+  switch (record.kind) {
+    case "account":
+      return `account|${norm(record.platform)}|${norm(record.username)}`;
+    case "transaction":
+      return [
+        "transaction",
+        String(record.paid_at || "").slice(0, 16),
+        record.amount_minor,
+        norm(record.merchant),
+      ].join("|");
+    case "session":
+      return `session|${record.day}|${norm(record.project)}|${record.minutes}`;
+    case "journal":
+      // 日记按天唯一，同一天再导入就是覆盖
+      return `journal|${record.day}`;
+    case "media": {
+      const mk = record.media_kind || record.kind || "";
+      return `media|${norm(record.title)}|${mk}`;
+    }
+    default:
+      return "";
+  }
+}
+
+function existingFingerprints(kind) {
+  const set = new Set();
+  for (const row of alive(list(kind))) set.add(dedupeKey({ ...row, kind }));
+  return set;
+}
+
+/**
+ * 草稿分成「值得导入」与「重复」两堆。同一份文件里的重复也要拦住。
+ * 按每条记录自己的类别去比对 —— 分享包可能同时含账号、账单、影视好几种。
+ */
+function splitFresh(records) {
+  const cache = new Map();
+  const knownFor = (kind) => {
+    if (!cache.has(kind)) cache.set(kind, existingFingerprints(kind));
+    return cache.get(kind);
+  };
+  const fresh = [];
+  const duplicate = [];
+  for (const record of records) {
+    const key = dedupeKey(record);
+    const known = record.kind === "setting" ? null : knownFor(record.kind);
+    if (!key || (known && known.has(key))) {
+      duplicate.push(record);
+      continue;
+    }
+    if (known) known.add(key);
+    fresh.push(record);
+  }
+  return { fresh, duplicate };
+}
+
+/** 有些来源导出的是完整的 otpauth:// URI，只取里面的 secret。 */
+function cleanTotp(value) {
+  const s = String(value || "").trim();
+  const m = s.match(/[?&]secret=([A-Za-z0-9=]+)/i);
+  return m ? m[1] : s;
+}
+
+function withImportTag(tags, on) {
+  const out = Array.isArray(tags) ? [...tags] : [];
+  // 打上「导入」标签是为了让用户事后能一次找出这批记录，后悔了还能撤销
+  if (on && !out.includes("导入")) out.push("导入");
+  return out;
+}
+
+/** 草稿 → 各模块 createXxx 的入参。 */
+function toPayload(record, tag) {
+  switch (record.kind) {
+    case "account":
+      return {
+        platform: record.platform,
+        category: record.category || "other",
+        username: record.username || "",
+        password: record.password || "",
+        totp_secret: cleanTotp(record.totp_secret),
+        url: record.url || "",
+        notes: record.notes || "",
+        tags: withImportTag(record.tags, tag),
+        is_favorite: !!record.is_favorite,
+      };
+    case "transaction": {
+      const payload = {
+        direction: record.direction || "expense",
+        amount: (record.amount_minor || 0) / 100,
+        currency: record.currency || "CNY",
+        merchant: record.merchant || "",
+        method: record.method || "",
+        notes: record.notes || "",
+        tags: withImportTag(record.tags, tag),
+        paid_at: record.paid_at || localIso(),
+      };
+      // 来源给了确切分类就沿用；认不出时**不传** category，让 AI 按商户名判定。
+      // 这行偷不得：传一个空 category 会把 AI 判定整个关掉。
+      if (record.category === "subscription" || record.is_subscription) {
+        payload.category = "subscription";
+      } else if (record.category && record.category !== "other") {
+        payload.category = record.category;
+      }
+      return payload;
+    }
+    case "session":
+      return {
+        day: record.day || localDay(),
+        project: record.project,
+        minutes: record.minutes,
+        mood: record.mood || 3,
+        content: record.content || "",
+        tags: withImportTag(record.tags, tag),
+      };
+    case "journal":
+      return {
+        day: record.day || localDay(),
+        mood: record.mood || 3,
+        summary: record.summary || "",
+        highlights: record.highlights || "",
+        tags: withImportTag(record.tags, tag),
+      };
+    case "media":
+      return {
+        title: record.title,
+        kind: record.media_kind || "movie",
+        status: record.status || "done",
+        rating: record.rating || 0,
+        review: record.review || "",
+        thoughts: record.thoughts || "",
+        director: record.director || "",
+        year: record.year || 0,
+        season: record.season || 0,
+        episode: record.episode || "",
+        watched_on: record.watched_on || "",
+        poster_url: record.poster_url || "",
+        tags: withImportTag(record.tags, tag),
+      };
+    default:
+      return null;
+  }
+}
+
+function publicAnalysis(analysis, fresh, duplicate) {
+  return {
+    shape: analysis.shape,
+    module: analysis.module,
+    module_label: analysis.moduleLabel,
+    confidence: analysis.confidence,
+    source: analysis.source,
+    warnings: analysis.warnings,
+    alternatives: analysis.alternatives,
+    stats: {
+      total: analysis.stats.total,
+      parsed: analysis.stats.parsed,
+      skipped: analysis.stats.skipped,
+      fresh: fresh.length,
+      duplicate: duplicate.length,
+    },
+    preview: fresh.slice(0, 15).map(describeRecord),
+    preview_duplicate: duplicate.slice(0, 3).map(describeRecord),
+  };
+}
+
+/** 这段文本是不是 LifeBook 分享包（别人分享给你的那种密文）。 */
+function looksLikeShare(text) {
+  const s = String(text || "").trim();
+  if (!s.startsWith("{")) return false;
+  try {
+    return JSON.parse(s).format === "lifebook-share";
+  } catch {
+    return false;
+  }
+}
+
+const KIND_TO_MODULE = {
+  account: "account",
+  transaction: "ledger",
+  session: "hours",
+  journal: "hours",
+  media: "media",
+};
+
+/**
+ * 分享包是密文，走的是「口令解密 → 复用里面的记录」，不是字段归一那套。
+ * 注意分享包里的账号清单**本来就不带口令** —— 生成分享时就裁掉了，
+ * 所以导进来的是账号名和网址，需要自己补密码。
+ */
+async function shareAnalysis(text, payload) {
+  const opened = await readShare(payload.password || "", text);
+  const data = opened.data || {};
+  const records = [];
+  for (const row of data.account || []) {
+    records.push({
+      kind: "account", platform: row.platform || "未命名", category: row.category || "other",
+      username: row.username || "", password: row.password || "", totp_secret: "",
+      url: row.url || "", notes: row.notes || "", tags: row.tags || [], is_favorite: false,
+    });
+  }
+  for (const row of data.transaction || []) {
+    records.push({
+      kind: "transaction", direction: row.direction || "expense",
+      amount_minor: row.amount_minor || 0, currency: row.currency || "CNY",
+      merchant: row.merchant || "", category: row.category || "", method: row.method || "",
+      idea: row.idea || "", feeling: row.feeling || "", notes: row.notes || "",
+      tags: row.tags || [], paid_at: row.paid_at || localIso(),
+      is_subscription: !!row.is_subscription, period: row.period || "",
+    });
+  }
+  for (const row of data.session || []) {
+    records.push({
+      kind: "session", day: String(row.day || "").slice(0, 10) || localDay(),
+      project: row.project || "未命名项目", minutes: row.minutes || 0,
+      mood: row.mood || 3, content: row.content || "", tags: row.tags || [],
+    });
+  }
+  for (const row of data.journal || []) {
+    records.push({
+      kind: "journal", day: String(row.day || "").slice(0, 10) || localDay(),
+      mood: row.mood || 3, summary: row.summary || "", highlights: row.highlights || "",
+      tags: row.tags || [],
+    });
+  }
+  for (const row of data.media || []) {
+    records.push({
+      kind: "media", media_kind: row.kind || "movie", title: row.title || "",
+      status: row.status || "done", rating: row.rating || 0, review: row.review || "",
+      thoughts: row.thoughts || "", director: row.director || "", year: row.year || 0,
+      season: row.season || 0, episode: row.episode || "", watched_on: row.watched_on || "",
+      poster_url: "", tags: row.tags || [],
+    });
+  }
+
+  const kinds = [...new Set(records.map((r) => r.kind))];
+  const warnings = ["分享包里的账号清单不含口令（生成时就去掉了），导入后需要自己补上"];
+  if (opened.note) warnings.push(`对方留言：${String(opened.note).slice(0, 80)}`);
+
+  return {
+    shape: "share",
+    module: "",
+    moduleLabel: kinds.map((k) => MODULES[KIND_TO_MODULE[k]] || k).join(" / ") || "分享包",
+    confidence: 1,
+    source: {
+      id: "lifebook-share",
+      label: "LifeBook 分享包",
+      hint: opened.from_device ? `来自 ${opened.from_device}` : "",
+    },
+    warnings,
+    alternatives: [],
+    stats: { total: records.length, parsed: records.length, skipped: 0 },
+    records,
+  };
+}
+
+/**
+ * 只看不写：识别格式、判断模块、算出会新增多少条、预览前几条。
+ * 应该先让用户过一眼再真导 —— 格式认错却直接写库，用户得自己一条条删。
+ */
+async function importScan(payload = {}) {
+  const text = String(payload.text || "");
+  if (looksLikeShare(text)) {
+    if (!payload.password) throw new ApiError("validation_error", "请先填写这个分享包的口令");
+    const analysis = await shareAnalysis(text, payload);
+    const { fresh, duplicate } = analysis.records.length
+      ? splitFresh(analysis.records)
+      : { fresh: [], duplicate: [] };
+    return publicAnalysis(analysis, fresh, duplicate);
+  }
+  const analysis = analyzeInput(text, { module: payload.module || "" });
+  const { fresh, duplicate } = analysis.records.length
+    ? splitFresh(analysis.records)
+    : { fresh: [], duplicate: [] };
+  return publicAnalysis(analysis, fresh, duplicate);
+}
+
+/** 执行导入。逐条走各模块本来的校验与 AI 打标，不是绕过业务逻辑直接写库。 */
+async function importApply(payload = {}) {
+  const text = String(payload.text || "");
+  if (!text.trim()) throw new ApiError("validation_error", "请先粘贴或选择要导入的内容");
+
+  const analysis = looksLikeShare(text)
+    ? (!payload.password
+      ? (() => { throw new ApiError("validation_error", "请先填写这个分享包的口令"); })()
+      : await shareAnalysis(text, payload))
+    : analyzeInput(text, { module: payload.module || "" });
+
+  if (!analysis.records.length) {
+    throw new ApiError("empty_import", analysis.warnings[0] || "没有解析出可导入的记录");
+  }
+
+  const { fresh, duplicate } = splitFresh(analysis.records);
+  const includeDuplicates = payload.include_duplicates === true;
+  const records = includeDuplicates ? [...fresh, ...duplicate] : fresh;
+
+  if (!records.length) {
+    return {
+      ...publicAnalysis(analysis, fresh, duplicate),
+      created: { account: 0, transaction: 0, session: 0, journal: 0, media: 0 },
+      created_total: 0,
+      skipped_duplicate: duplicate.length,
+      failed: [],
+      nothing_new: true,
+    };
+  }
+
+  const tag = payload.tag_import !== false;
+  const created = { account: 0, transaction: 0, session: 0, journal: 0, media: 0 };
+  const failed = [];
+
+  for (let i = 0; i < records.length; i += 1) {
+    const record = records[i];
+    const body = toPayload(record, tag);
+    try {
+      if (record.kind === "account") await api.createAccount(body);
+      else if (record.kind === "transaction") await api.createTransaction(body);
+      else if (record.kind === "session") await api.createSession(body);
+      else if (record.kind === "journal") await api.saveJournal(body);
+      else if (record.kind === "media") await api.createMedia(body);
+      else continue;
+      created[record.kind] += 1;
+    } catch (err) {
+      failed.push({
+        label: describeRecord(record),
+        message: err instanceof ApiError ? err.friendly : (err && err.message) || "导入失败",
+      });
+    }
+    // 批量导入时定期让出事件循环，界面上的「正在导入」才不会看起来像卡死
+    if (i % 50 === 49) await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  const createdTotal = Object.values(created).reduce((n, v) => n + v, 0);
+  return {
+    ...publicAnalysis(analysis, fresh, duplicate),
+    created,
+    created_total: createdTotal,
+    skipped_duplicate: includeDuplicates ? 0 : duplicate.length,
+    failed,
+    nothing_new: createdTotal === 0,
   };
 }
 

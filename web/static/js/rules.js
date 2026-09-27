@@ -64,6 +64,89 @@ export const CATEGORY_LABELS = {
 
 export const LEDGER_CATEGORIES = Object.keys(CATEGORY_LABELS);
 
+// 账号本子的分类。放在这里而不是 localapi，是因为导入中转也要用它把
+// 外部导出的中文分类名（「社交」「银行」…）翻译成内部 key。
+export const ACCOUNT_CATEGORY_LABELS = {
+  social: "社交", email: "邮箱", finance: "金融支付", dev: "开发运维", work: "办公协作",
+  gaming: "游戏娱乐", shopping: "电商购物", subscription: "会员订阅", education: "学习教育",
+  other: "其他",
+};
+
+// 外部来源给的中文（或英文）分类名 → 内部 key。
+// 认不出来的一律落 other —— 宁可归到「其他」，也不要丢记录。
+const ACCOUNT_CATEGORY_ALIASES = {
+  social: ["社交", "聊天", "即时通讯", "通讯", "社交网络", "论坛", "community", "social", "chat"],
+  email: ["邮箱", "邮件", "电子邮箱", "邮局", "email", "mail"],
+  finance: ["金融", "金融支付", "银行", "支付", "理财", "证券", "股票", "基金", "信用卡", "钱包",
+    "bank", "finance", "payment", "wallet"],
+  dev: ["开发", "开发运维", "运维", "代码", "程序", "程序员", "服务器", "云服务", "域名", "托管",
+    "dev", "developer", "server", "hosting", "cloud", "代码托管"],
+  work: ["办公", "办公协作", "工作", "协作", "生产力", "公司", "企业", "work", "office", "productivity"],
+  gaming: ["游戏", "游戏娱乐", "娱乐", "影音", "音乐", "视频", "game", "gaming", "entertainment", "media"],
+  shopping: ["购物", "电商", "电商购物", "网购", "商城", "商店", "shop", "shopping", "mall", "ecommerce"],
+  subscription: ["会员", "订阅", "会员订阅", "vip", "续费", "subscription", "membership", "premium"],
+  education: ["学习", "学习教育", "教育", "阅读", "课程", "学校", "education", "study", "school", "course"],
+  other: ["其他", "其它", "未分类", "工具", "默认", "other", "misc", "default", "tools"],
+};
+
+const LEDGER_CATEGORY_ALIASES = {
+  food: ["餐饮", "吃饭", "饮食", "外卖", "food", "drink", "meal"],
+  transport: ["交通", "出行", "通勤", "打车", "transport", "travel", "traffic"],
+  shopping: ["购物", "消费", "网购", "日用品", "shopping", "goods"],
+  housing: ["居住", "房租", "住房", "物业", "家居", "housing", "rent", "home"],
+  health: ["医疗", "健康", "医药", "药品", "health", "medical"],
+  education: ["学习", "教育", "书籍", "图书", "培训", "education", "study", "book"],
+  entertainment: ["娱乐", "休闲", "影视", "影音", "游戏", "演出", "entertainment", "fun", "game"],
+  social: ["人情", "社交", "红包", "礼金", "礼物", "social", "gift"],
+  subscription: ["会员", "会员订阅", "订阅", "软件", "服务", "subscription", "software", "service"],
+  income: ["收入", "工资", "薪水", "奖金", "收款", "income", "salary"],
+  other: ["其他", "其它", "未分类", "other", "misc"],
+};
+
+/** 归一化分类名：去空白、括号、大小写差异。 */
+function normCategoryName(raw) {
+  return String(raw || "")
+    .replace(/[（(【\[].*?[)）】\]]/g, "")
+    .replace(/[\s_\-/、，,·]+/g, "")
+    .toLowerCase()
+    .trim();
+}
+
+function matchAlias(raw, table, fallback, strict = false) {
+  const key = normCategoryName(raw);
+  if (!key) return fallback;
+  // 先精确命中内部 key（外部可能直接导出了英文 key）
+  if (table[key]) return key;
+  for (const [k, names] of Object.entries(table)) {
+    for (const n of names) {
+      if (normCategoryName(n) === key) return k;
+    }
+  }
+  // strict 模式到此为止。
+  // 导入外部数据时要用严格模式：来源写的「商户消费」「餐饮美食」这类非标准分类名，
+  // 靠模糊包含会归成看似合理其实错误的分类（「商户消费」→ 购物）。
+  // 认不出来就交给 AI 按商户名判定，比硬塞一个错误分类好。
+  if (strict) return fallback;
+  // 再退到包含匹配：「银行支付」→ 金融支付，「会员订阅支出」→ 会员订阅
+  for (const [k, names] of Object.entries(table)) {
+    for (const n of names) {
+      const alias = normCategoryName(n);
+      if (alias && (key.includes(alias) || alias.includes(key))) return k;
+    }
+  }
+  return fallback;
+}
+
+/** 账号分类：中文/英文名 → 内部 key。strict 时只做精确匹配。 */
+export function accountCategoryKey(raw, strict = false) {
+  return matchAlias(raw, ACCOUNT_CATEGORY_ALIASES, "other", strict);
+}
+
+/** 记账分类：中文/英文名 → 内部 key。strict 时只做精确匹配。 */
+export function ledgerCategoryKey(raw, strict = false) {
+  return matchAlias(raw, LEDGER_CATEGORY_ALIASES, "other", strict);
+}
+
 const YEARLY_HINTS = ["年费", "年度", "全年", "annual", "yearly", "12个月", "一年"];
 const WEEKLY_HINTS = ["周付", "weekly", "连续包周"];
 const QUARTER_HINTS = ["季度", "季付", "quarterly", "3个月"];

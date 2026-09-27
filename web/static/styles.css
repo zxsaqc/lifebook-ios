@@ -228,3 +228,29 @@ main { flex: 1; padding: 14px 16px calc(96px + var(--safe-b)); display: flex; fl
   .topbar { background: var(--bg); }
 }
 @media (max-width: 899px) { .sidebar { display: none; } }
+
+/* ---------- 同步 / 分享 / 导入面板共用 ---------- */
+.sh-kind { display: inline-block; font-size: 12px; color: var(--text-dim); margin-right: 8px; }
+
+/* ---------- 导入中转 ---------- */
+/* 识别结果里那个「我认出来这是什么」的标签 */
+.tagchip {
+  display: inline-block; padding: 2px 9px; border-radius: 999px;
+  background: var(--brand-soft); color: var(--brand); font-size: 12px; font-weight: 600;
+}
+.warnlist { margin: 8px 0 10px; padding-left: 18px; font-size: 12px; color: var(--text-dim); }
+.warnlist li { margin: 3px 0; }
+.srclist { margin: 6px 0 10px; padding-left: 18px; font-size: 13px; }
+.srclist li { margin: 7px 0; }
+/* 预览：让用户导入前先看清会变成什么样 */
+.preview-list {
+  margin-top: 10px; border: 1px solid var(--line); border-radius: var(--radius-sm);
+  overflow: hidden; background: var(--surface-2);
+}
+.preview-row {
+  padding: 8px 12px; font-size: 13px; border-bottom: 1px solid var(--line);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.preview-row:last-child { border-bottom: 0; }
+.checkline { display: flex; align-items: flex-start; gap: 8px; margin: 9px 0; font-size: 13px; }
+.checkline input { width: auto; margin: 3px 0 0; flex: 0 0 auto; }

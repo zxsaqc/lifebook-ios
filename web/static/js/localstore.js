@@ -195,6 +195,11 @@ export async function init() {
   if (!cryptoAvailable()) {
     throw new Error("SECURE_CONTEXT_REQUIRED");
   }
+  // 已经解锁过就不要再走一遍：下面会把内存里的密钥和已解密数据全部清掉，
+  // 重复调用等于把用户刚设好的密钥悄悄弄丢（症状是「明明刚解锁却提示已锁定」）。
+  // 界面上「先创建主口令、再查询状态」就是这条路径。
+  if (vault.unlocked && vault.key) return vault.initialized;
+
   const salt = await metaGet("salt");
   const verifier = await metaGet("verifier");
   const ident = await loadIdentity();

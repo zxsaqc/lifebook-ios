@@ -95,12 +95,15 @@ jobs:
           cp -R ../../web/static/. "$APP/web/"
           test -f "$APP/web/index.html" || (echo "错误：web/index.html 缺失" && exit 1)
           test -f "$APP/web/js/localapi.js" || (echo "错误：本机数据层脚本缺失" && exit 1)
-          # 同步与分享是本机功能，缺了会静默失效，所以逐个确认
-          for f in sync.js synclocal.js share.js syncui.js crypto.js localstore.js rules.js app.js; do
+          # 同步、分享、导入都是本机功能，缺一个文件就会静默失效，所以逐个确认
+          for f in sync.js synclocal.js share.js syncui.js importers.js importui.js crypto.js localstore.js rules.js app.js; do
             test -f "$APP/web/js/$f" || (echo "错误：js/$f 缺失" && exit 1)
           done
-          # 确认页面确实引用了同步模块（改动后忘了接线也能在这里挡住）
+          # 确认页面确实引用了这些模块（改动后忘了接线也能在这里挡住）
           grep -q "syncui.js" "$APP/web/js/app.js" || (echo "错误：app.js 未引入同步面板" && exit 1)
+          grep -q "importui.js" "$APP/web/js/app.js" || (echo "错误：app.js 未引入导入面板" && exit 1)
+          # 导入中转是整个推广逻辑的入口，接口没暴露就等于没做
+          grep -q "importApply" "$APP/web/js/localapi.js" || (echo "错误：导入接口未暴露" && exit 1)
           grep -q "localapi.js" "$APP/web/js/api.js" || (echo "错误：api.js 未指向本机实现" && exit 1)
           echo "前端资源已打入 bundle：$(find "$APP/web" -type f | wc -l) 个文件"
 

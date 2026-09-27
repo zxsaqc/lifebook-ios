@@ -7,6 +7,7 @@ import { ledger } from "./views/ledger.js";
 import { accounts } from "./views/accounts.js";
 import { media } from "./views/media.js";
 import { openShareSheet, openSyncSheet } from "./syncui.js";
+import { openImportSheet } from "./importui.js";
 
 // 说明：不再注册 Service Worker。
 // 数据已经完全在本机，页面资源也由 App 自带的本地服务提供，不需要离线缓存；
@@ -184,7 +185,14 @@ function openDataSheet() {
             不会上传到任何服务器。主口令本身不落盘，忘记就无法解开。
           </p>
 
-          <div class="section-title" style="margin-top:14px">同步与分享</div>
+          <div class="section-title" style="margin-top:14px">1. 从别的软件搬进来</div>
+          <p class="hintline">
+            你在别的账号本子、记账 App、影视清单里记的东西，可以直接导入过来。
+            解析和导入都只在这台设备上做，而且会先让你看清楚会变成什么样再写入。
+          </p>
+          <button class="btn ghost" id="bk-import">导入数据</button>
+
+          <div class="section-title" style="margin-top:18px">2. 多设备同步与分享</div>
           <p class="hintline">
             云同步上传的是<strong>密文</strong>；分享给别人时用单独的一次性口令，
             <strong>永远不要把主口令给别人</strong>。
@@ -194,7 +202,7 @@ function openDataSheet() {
             <button class="btn ghost" id="bk-share">分享给别人</button>
           </div>
 
-          <div class="section-title" style="margin-top:18px">1. 导出备份</div>
+          <div class="section-title" style="margin-top:18px">3. 导出备份</div>
           <p class="hintline">手机丢了或换机时用它恢复。备份串已加密，可以放心存到备忘录或发给自己。</p>
           <label class="field"><span>备份口令（至少 6 位，请自己记住）</span>
             <input type="password" id="bk-pw" placeholder="用于加密这份备份" />
@@ -203,14 +211,14 @@ function openDataSheet() {
           <textarea id="bk-out" rows="5" readonly
             placeholder="生成后备份内容会出现在这里，长按全选 → 复制"></textarea>
 
-          <div class="section-title" style="margin-top:18px">2. 恢复备份</div>
+          <div class="section-title" style="margin-top:18px">4. 恢复备份</div>
           <label class="field"><span>把之前导出的备份内容粘贴到这里</span>
             <textarea id="bk-in" rows="4" placeholder="粘贴备份内容"></textarea>
           </label>
           <button class="btn block" id="bk-import">用备份覆盖本机数据</button>
           <p class="hintline">恢复会覆盖当前数据且不可撤销，建议先导出一份当前的。</p>
 
-          <div class="section-title" style="margin-top:18px">3. 存储占用</div>
+          <div class="section-title" style="margin-top:18px">5. 存储占用</div>
           <p class="hintline" id="bk-usage">正在统计…</p>
         </div>
       </div>
@@ -233,6 +241,7 @@ function openDataSheet() {
   };
   $("#bk-sync", host).addEventListener("click", () => hop(openSyncSheet));
   $("#bk-share", host).addEventListener("click", () => hop(openShareSheet));
+  $("#bk-import", host).addEventListener("click", () => hop(openImportSheet));
 
   api.localUsage()
     .then((u) => {
@@ -278,6 +287,22 @@ $("#sync-btn").addEventListener("click", () => {
     openSyncSheet();
   } catch (err) {
     toast(err?.message || "无法打开同步设置", "error");
+  }
+});
+$("#import-btn").addEventListener("click", () => {
+  try {
+    openImportSheet();
+  } catch (err) {
+    toast(err?.message || "无法打开导入面板", "error");
+  }
+});
+
+// 导入会一次性写入一批记录，当前视图里的统计和列表都过期了，让它重新拉一次。
+// 只 refresh 不重新 mount，避免刚导入完页面整块闪一下。
+window.addEventListener("data:changed", () => {
+  const view = views[current];
+  if (view && mounted.has(current) && typeof view.refresh === "function") {
+    Promise.resolve(view.refresh()).catch(handleError);
   }
 });
 
