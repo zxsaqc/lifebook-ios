@@ -48,7 +48,7 @@ targets:
         # 1.0.1：修「页面资源全部 404」——打包抹掉了 static/ 那一层，
         # 导致样式表与 js/app.js 都加载不到（界面裸奔、按钮没反应）。
         CFBundleShortVersionString: "1.0.1"
-        CFBundleVersion: "2"
+        CFBundleVersion: "3"
         LSRequiresIPhoneOS: true
         # 只放行本机回环地址的明文请求（App 自带的本地服务）。
         # 不用 NSAllowsArbitraryLoads —— 数据不再出设备，没有理由放开任意外网明文。

@@ -39,6 +39,22 @@ python scripts/build_ipa.py     # 同步 → 云编译 → ipa 自动回到桌�
 
 网页上手动触发也可以：Actions → Build LifeBook iOS → **Run workflow**。
 
+### 站点根约定（改路径前必读）
+
+URL 空间是「站点根 = `web/static`」+ 三个根级别名，三处必须一致：
+
+| 位置 | 规定 |
+| --- | --- |
+| 前端 | 页面里写 `/static/styles.css`、`/static/js/app.js` |
+| 本地服务 | `LocalWebServer.resolve()` 把 `/static/x` → `web/static/x`；别名 `/` 与 `/index.html` → `static/index.html`、`/manifest.webmanifest`、`/sw.js` |
+| 打包 | `$APP/web/static/...`，**不能把 `static/` 这一层抹掉** |
+
+踩过的坑：`cp -R web/static/. → $APP/web/` 会把 `static/` 抹平，页面上所有资源
+全部 404 —— 样式表加载不到（界面裸奔成裸 HTML）、`js/app.js` 加载不到
+（点「进入」毫无反应），而**构建全程不报错**。现在这几处都有检查：
+`scripts/local-tests/check-layout.sh`（本地秒级预演）、CI 的「引用一致性」段、
+以及出包后自动跑的 `scripts/verify_ipa.py`（会解析 Swift 的路由表与预期逐条比对）。
+
 ## 安装与使用
 
 1. 把 `LifeBook.ipa` 传到手机（AirDrop / 文件 App），用 **TrollStore** 打开安装；

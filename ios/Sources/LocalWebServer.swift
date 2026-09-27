@@ -381,6 +381,9 @@ final class LocalWebServer {
     private static func resolve(path: inout String, under root: URL) -> URL? {
         if path.isEmpty || path == "/" { path = "/index.html" }
         switch path {
+        // 注意 `/index.html` 也要显式映射：App 启动时加载的就是这个地址
+        // （见 WebShellView 的 startURL），漏了它首页直接 404 —— 整个界面打不开。
+        case "/index.html": path = "/static/index.html"
         case "/manifest.webmanifest": path = "/static/manifest.webmanifest"
         case "/sw.js": path = "/static/sw.js"
         default: break
