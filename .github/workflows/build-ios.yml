@@ -85,6 +85,15 @@ jobs:
           echo "--- 图标配置 ---"
           $PB -c "Print :CFBundleIcons" "$APP/Info.plist" || true
 
+          # 前端资源：无条件拷进 bundle 的 web/ 目录，App 靠它提供本地服务。
+          # 不依赖 xcodegen 的资源处理，避免个别版本上 folder 引用不生效。
+          rm -rf "$APP/web"
+          mkdir -p "$APP/web"
+          cp -R ../../web/static/. "$APP/web/"
+          test -f "$APP/web/index.html" || (echo "错误：web/index.html 缺失" && exit 1)
+          test -f "$APP/web/js/localapi.js" || (echo "错误：本机数据层脚本缺失" && exit 1)
+          echo "前端资源已打入 bundle：$(find "$APP/web" -type f | wc -l) 个文件"
+
           # ad-hoc 签名必须在改完 bundle 之后做，否则签名会被内容变动作废
           codesign --force --deep --sign - "$APP" || true
           zip -qry LifeBook.ipa Payload
@@ -98,6 +107,11 @@ jobs:
           echo "=== 是否有图标 ==="
           ls Payload/*.app/Assets.car 2>/dev/null && echo "Assets.car 存在" || echo "Assets.car 缺失（靠 Info.plist 的 CFBundleIconFiles 兜底）"
           ls Payload/*.app/*.png 2>/dev/null | head -5 || true
+          echo "=== 前端资源（本地服务用）==="
+          find Payload/*.app/web -type f 2>/dev/null | head -20 || echo "缺少 web 目录！"
+          echo "=== 图标与权限配置 ==="
+          /usr/libexec/PlistBuddy -c "Print :NSAppTransportSecurity" Payload/*.app/Info.plist || true
+          /usr/libexec/PlistBuddy -c "Print :NSCameraUsageDescription" Payload/*.app/Info.plist || true
 
       - name: Upload ipa artifact
         uses: actions/upload-artifact@v4

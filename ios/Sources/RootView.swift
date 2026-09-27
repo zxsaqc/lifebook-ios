@@ -1,15 +1,8 @@
 import SwiftUI
 
+/// 入口即为主界面：数据在本机，不需要任何连接配置。
 struct RootView: View {
-    @EnvironmentObject private var settings: AppSettings
-
     var body: some View {
-        Group {
-            if settings.isConfigured {
-                WebShellView()
-            } else {
-                SetupView()
-            }
-        }
+        WebShellView()
     }
 }

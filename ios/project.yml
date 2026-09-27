@@ -33,6 +33,10 @@ targets:
       # 2) 兜底：直接把 PNG 拷进 bundle 根目录，配合 Info.plist 的 CFBundleIconFiles。
       #    某些 xcodegen / Xcode 组合下 catalog 不会被编译，图标就丢了，这层保证一定有图标。
       - path: Resources/AppIcon.appiconset
+      # 3) 整个前端（本地服务提供的静态资源），必须带目录结构进 bundle
+      - path: ../web/static
+        name: web
+        type: folder
     info:
       path: Info.plist
       properties:
@@ -41,9 +45,13 @@ targets:
         CFBundleShortVersionString: "1.0.0"
         CFBundleVersion: "1"
         LSRequiresIPhoneOS: true
-        # 电脑上跑的是本机 http 服务，必须放行局域网明文流量
+        # 只放行本机回环地址的明文请求（App 自带的本地服务）。
+        # 不用 NSAllowsArbitraryLoads —— 数据不再出设备，没有理由放开任意外网明文。
         NSAppTransportSecurity:
-          NSAllowsArbitraryLoads: true
+          NSAllowsLocalNetworking: true
+        # 记账凭证拍照/选图所需；照片只保存在本机，不会上传
+        NSCameraUsageDescription: 用于拍摄记账凭证照片，照片只保存在本机
+        NSPhotoLibraryUsageDescription: 用于选择记账凭证照片，照片只保存在本机
         UILaunchScreen:
           UIColorName: LaunchBackground
         # 图标配置由 CI 用 PlistBuddy 写入（单一来源，避免和这里重复）

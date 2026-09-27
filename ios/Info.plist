@@ -25,12 +25,17 @@
 	<false/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
-	<!-- 电脑上是本机 http 服务，必须放行局域网明文流量 -->
+	<!-- 只放行本机回环地址（App 自带的本地服务），不放开任意外网明文 -->
 	<key>NSAppTransportSecurity</key>
 	<dict>
-		<key>NSAllowsArbitraryLoads</key>
+		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<!-- 记账凭证拍照/选图；照片只保存在本机 -->
+	<key>NSCameraUsageDescription</key>
+	<string>用于拍摄记账凭证照片，照片只保存在本机</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>用于选择记账凭证照片，照片只保存在本机</string>
 	<key>UILaunchScreen</key>
 	<dict>
 		<key>UIColorName</key>

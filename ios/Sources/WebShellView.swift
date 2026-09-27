@@ -2,76 +2,109 @@ import SwiftUI
 import UIKit
 import WebKit
 
+/// 主界面：加载 App 自带的本地服务。
+///
+/// 数据全部存在这台手机上（加密后落在 App 沙盒里），**不需要电脑、不需要网络**。
 struct WebShellView: View {
-    @EnvironmentObject private var settings: AppSettings
 
+    /// 本机服务端口，0 表示还在准备中
+    @State private var port: UInt16 = 0
+    @State private var bootError: String?
     @State private var isLoading = true
-    @State private var errorMessage: String?
+    @State private var loadError: String?
     @State private var reloadToken = 0
-    @State private var showSettings = false
+
+    private var startURL: String {
+        "http://127.0.0.1:\(port)/index.html"
+    }
 
     var body: some View {
         NavigationView {
             ZStack {
-                WebViewContainer(
-                    address: settings.normalizedAddress,
-                    isLoading: $isLoading,
-                    errorMessage: $errorMessage,
-                    reloadToken: $reloadToken
-                )
-                .edgesIgnoringSafeArea(.bottom)
-
-                VStack {
-                    if isLoading {
-                        ProgressView()
-                            .padding(.top, 96)
-                    }
-                    Spacer()
+                if port > 0 {
+                    WebViewContainer(
+                        urlString: startURL,
+                        isLoading: $isLoading,
+                        errorMessage: $loadError,
+                        reloadToken: $reloadToken
+                    )
+                    .edgesIgnoringSafeArea(.bottom)
                 }
 
-                if let message = errorMessage {
-                    ErrorOverlay(
-                        message: message,
-                        address: settings.normalizedAddress,
-                        onRetry: { reloadToken += 1 },
-                        onChangeAddress: { showSettings = true }
-                    )
+                if port > 0 && isLoading {
+                    VStack {
+                        ProgressView().padding(.top, 96)
+                        Spacer()
+                    }
+                }
+
+                if port == 0 {
+                    VStack(spacing: 14) {
+                        if let message = bootError {
+                            Image(systemName: "exclamationmark.triangle")
+                                .font(.system(size: 40))
+                                .foregroundColor(.secondary)
+                            Text(message)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal, 32)
+                            Button(action: boot) {
+                                Text("重试")
+                                    .fontWeight(.semibold)
+                                    .foregroundColor(.white)
+                                    .frame(maxWidth: 200)
+                                    .padding(.vertical, 12)
+                                    .background(Color.accentColor)
+                                    .cornerRadius(10)
+                            }
+                        } else {
+                            ProgressView()
+                            Text("正在准备本机数据…")
+                                .font(.footnote)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+
+                if let message = loadError {
+                    ErrorOverlay(message: message, onRetry: { reloadToken += 1 })
                 }
             }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button(action: { reloadToken += 1 }) {
-                        Image(systemName: "house")
-                    }
-                }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(action: { showSettings = true }) {
-                        Image(systemName: "gear")
+                    Button(action: { reloadToken += 1 }) {
+                        Image(systemName: "arrow.clockwise")
                     }
                 }
             }
         }
         .navigationViewStyle(StackNavigationViewStyle())
-        .sheet(isPresented: $showSettings) {
-            SettingsSheet(onDone: { changed in
-                showSettings = false
-                if changed { reloadToken += 1 }
-            })
-            .environmentObject(settings)
-        }
-        // 从后台切回来时自动重试一次，省得手动刷新
+        .onAppear(perform: boot)
+        // 从后台切回来时，若之前加载失败就自动重试一次
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
-            if errorMessage != nil { reloadToken += 1 }
+            if loadError != nil { reloadToken += 1 }
+        }
+    }
+
+    private func boot() {
+        guard port == 0 else { return }
+        bootError = nil
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let p = try LocalWebServer.shared.start()
+                DispatchQueue.main.async { port = p }
+            } catch {
+                DispatchQueue.main.async {
+                    bootError = "本机服务启动失败：\(error.localizedDescription)"
+                }
+            }
         }
     }
 }
 
 private struct ErrorOverlay: View {
     let message: String
-    let address: String
     let onRetry: () -> Void
-    let onChangeAddress: () -> Void
 
     var body: some View {
         ZStack {
@@ -79,44 +112,35 @@ private struct ErrorOverlay: View {
             Color(.sRGB, red: 0.97, green: 0.97, blue: 0.98, opacity: 1)
                 .edgesIgnoringSafeArea(.all)
             VStack(spacing: 16) {
-                Image(systemName: "wifi.slash")
+                Image(systemName: "exclamationmark.triangle")
                     .font(.system(size: 44))
                     .foregroundColor(.secondary)
                 Text(message)
                     .font(.body)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 24)
-                Text(address)
-                    .font(.system(.footnote, design: .monospaced))
-                    .foregroundColor(.secondary)
-                VStack(spacing: 10) {
-                    Button(action: onRetry) {
-                        Text("重新连接")
-                            .fontWeight(.semibold)
-                            .foregroundColor(.white)
-                            .frame(maxWidth: 240)
-                            .padding(.vertical, 12)
-                            .background(Color.accentColor)
-                            .cornerRadius(10)
-                    }
-                    Button("换个地址", action: onChangeAddress)
-                        .font(.footnote)
-                        .foregroundColor(.secondary)
+                Button(action: onRetry) {
+                    Text("重新加载")
+                        .fontWeight(.semibold)
+                        .foregroundColor(.white)
+                        .frame(maxWidth: 240)
+                        .padding(.vertical, 12)
+                        .background(Color.accentColor)
+                        .cornerRadius(10)
                 }
-                Text("确认电脑已开机、桌面「LifeBook 手机模式」窗口还开着、手机与电脑连同一个 WiFi。")
+                Text("你的数据保存在这台手机里，重新加载不会丢失。")
                     .font(.footnote)
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 32)
-                    .padding(.top, 8)
             }
         }
     }
 }
 
-/// WKWebView 的 SwiftUI 包装：持久化 Cookie、支持下拉刷新、失败时给出人话提示。
+/// WKWebView 的 SwiftUI 包装：持久化存储、支持下拉刷新、失败时给人话提示。
 struct WebViewContainer: UIViewRepresentable {
-    let address: String
+    let urlString: String
     @Binding var isLoading: Bool
     @Binding var errorMessage: String?
     @Binding var reloadToken: Int
@@ -125,7 +149,9 @@ struct WebViewContainer: UIViewRepresentable {
 
     func makeUIView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
+        // 持久化存储：本地数据库（IndexedDB）落在 App 沙盒里，升级/重启都不丢
         configuration.websiteDataStore = WKWebsiteDataStore.default()
+        configuration.allowsInlineMediaPlayback = true
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
@@ -134,6 +160,8 @@ struct WebViewContainer: UIViewRepresentable {
         webView.backgroundColor = UIColor.systemBackground
         webView.scrollView.bounces = true
         webView.scrollView.refreshControl = context.coordinator.refreshControl
+        // 避免键盘弹出时页面被顶飞
+        webView.scrollView.contentInsetAdjustmentBehavior = .automatic
 
         context.coordinator.webView = webView
         load(into: webView)
@@ -148,7 +176,7 @@ struct WebViewContainer: UIViewRepresentable {
     }
 
     private func load(into webView: WKWebView) {
-        guard let url = URL(string: address) else { return }
+        guard let url = URL(string: urlString) else { return }
         isLoading = true
         let request = URLRequest(
             url: url,
@@ -193,35 +221,12 @@ struct WebViewContainer: UIViewRepresentable {
             handle(error)
         }
 
-        func webView(
-            _ webView: WKWebView,
-            didReceive challenge: URLAuthenticationChallenge,
-            completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
-        ) {
-            completionHandler(.performDefaultHandling, nil)
-        }
-
         private func handle(_ error: Error) {
             parent.isLoading = false
             refreshControl.endRefreshing()
             let nsError = error as NSError
-            // 页面自己发起的跳转被取消不算失败
             if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled { return }
-            parent.errorMessage = Self.describe(nsError)
-        }
-
-        private static func describe(_ error: NSError) -> String {
-            guard error.domain == NSURLErrorDomain else { return error.localizedDescription }
-            switch error.code {
-            case NSURLErrorCannotConnectToHost, NSURLErrorCannotFindHost:
-                return "连不上电脑上的 LifeBook。"
-            case NSURLErrorTimedOut:
-                return "连接超时，地址可能填错了。"
-            case NSURLErrorNotConnectedToInternet:
-                return "手机当前没有网络，先连上 WiFi。"
-            default:
-                return error.localizedDescription
-            }
+            parent.errorMessage = "页面加载失败：\(nsError.localizedDescription)"
         }
     }
 }
