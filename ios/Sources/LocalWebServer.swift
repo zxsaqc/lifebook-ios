@@ -233,15 +233,17 @@ final class LocalWebServer {
                  body: Data("Bad Request".utf8), type: "text/plain; charset=utf-8")
             return
         }
-        if path == "/" || path.isEmpty { path = "/index.html" }
-
         guard let root = webRoot else {
             send(connection, status: "500 Internal Server Error",
                  body: Data("No web root".utf8), type: "text/plain; charset=utf-8")
             return
         }
 
-        let fileURL = root.appendingPathComponent(String(path.dropFirst()))
+        guard let fileURL = Self.resolve(path: &path, under: root) else {
+            send(connection, status: "404 Not Found",
+                 body: Data("Not Found".utf8), type: "text/plain; charset=utf-8")
+            return
+        }
         guard let data = try? Data(contentsOf: fileURL) else {
             send(connection, status: "404 Not Found",
                  body: Data("Not Found".utf8), type: "text/plain; charset=utf-8")
@@ -359,6 +361,32 @@ final class LocalWebServer {
         connection.send(content: payload, completion: .contentProcessed { _ in
             connection.cancel()
         })
+    }
+
+    // MARK: - 站点根与 URL → 文件
+
+    /// 把 URL 路径映射成 bundle 里的文件，顺便把最终路径写回 `path`（MIME 要靠它判扩展名）。
+    ///
+    /// **这里必须和开发服务器（`app/main.py`）的 URL 空间逐条对齐**：
+    ///     站点根 = `web/static`（FastAPI 把 `web/static` 挂在 `/static`）
+    ///     只有三个根级别名：`/`、`/manifest.webmanifest`、`/sw.js`
+    /// 页面里写的是 `/static/styles.css` 这种带前缀的绝对地址，所以**bundle 里也得有
+    /// `static/` 这一层**。
+    ///
+    /// 为什么写这么细：曾经打包时用 `cp -R web/static/. → $APP/web/` 把 `static/` 抹平了，
+    /// 于是页面上所有 `/static/...` 全部 404 —— 样式表没加载（界面裸奔）、
+    /// `js/app.js` 没加载（点按钮毫无反应），而**构建全程不报任何错**。
+    /// 现在多了一层 `hasPrefix` 白名单：映射不到就老实回 404，不再可能出现
+    /// "路径算错了但默默读到别的文件"。
+    private static func resolve(path: inout String, under root: URL) -> URL? {
+        if path.isEmpty || path == "/" { path = "/index.html" }
+        switch path {
+        case "/manifest.webmanifest": path = "/static/manifest.webmanifest"
+        case "/sw.js": path = "/static/sw.js"
+        default: break
+        }
+        guard path.hasPrefix("/static/") else { return nil }
+        return root.appendingPathComponent(String(path.dropFirst()))
     }
 
     private static func mimeType(for path: String) -> String {

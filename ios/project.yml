@@ -33,8 +33,11 @@ targets:
       # 2) 兜底：直接把 PNG 拷进 bundle 根目录，配合 Info.plist 的 CFBundleIconFiles。
       #    某些 xcodegen / Xcode 组合下 catalog 不会被编译，图标就丢了，这层保证一定有图标。
       - path: Resources/AppIcon.appiconset
-      # 3) 整个前端（本地服务提供的静态资源），必须带目录结构进 bundle
-      - path: ../web/static
+      # 3) 整个前端（本地服务提供的静态资源），必须带目录结构进 bundle。
+      #    注意这里放的是 web/ 而不是 web/static：folder 引用会按**自身名字**落进
+      #    bundle，指到 web/ 才能得到 web/static/...，页面里的 `/static/xxx` 才命得中。
+      #    （指到 web/static 会得到 web/xxx，把 static 这层抹掉，页面资源全 404。）
+      - path: ../web
         name: web
         type: folder
     info:
@@ -42,8 +45,10 @@ targets:
       properties:
         CFBundleDisplayName: LifeBook
         CFBundleName: LifeBook
-        CFBundleShortVersionString: "1.0.0"
-        CFBundleVersion: "1"
+        # 1.0.1：修「页面资源全部 404」——打包抹掉了 static/ 那一层，
+        # 导致样式表与 js/app.js 都加载不到（界面裸奔、按钮没反应）。
+        CFBundleShortVersionString: "1.0.1"
+        CFBundleVersion: "2"
         LSRequiresIPhoneOS: true
         # 只放行本机回环地址的明文请求（App 自带的本地服务）。
         # 不用 NSAllowsArbitraryLoads —— 数据不再出设备，没有理由放开任意外网明文。
