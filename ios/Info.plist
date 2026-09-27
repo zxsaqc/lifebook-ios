@@ -16,23 +16,7 @@
 	<string>$(PRODUCT_NAME)</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
-	<!-- 图标兜底：即使 Asset Catalog 没被编译成 Assets.car，系统也能从这里取到主屏图标 -->
-	<key>CFBundleIcons</key>
-	<dict>
-		<key>CFBundlePrimaryIcon</key>
-		<dict>
-			<key>CFBundleIconFiles</key>
-			<array>
-				<string>Icon-180</string>
-				<string>Icon-120</string>
-				<string>Icon-167</string>
-				<string>Icon-152</string>
-				<string>Icon-1024</string>
-			</array>
-			<key>UIPrerenderedIcon</key>
-			<false/>
-		</dict>
-	</dict>
+	<!-- 图标配置由 CI 在打包阶段用 PlistBuddy 写入，此处不重复声明 -->
 	<key>CFBundleShortVersionString</key>
 	<string>1.0.0</string>
 	<key>CFBundleVersion</key>

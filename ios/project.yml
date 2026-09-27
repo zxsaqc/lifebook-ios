@@ -46,16 +46,7 @@ targets:
           NSAllowsArbitraryLoads: true
         UILaunchScreen:
           UIColorName: LaunchBackground
-        # 图标兜底：CI 会把 PNG 直接拷进 bundle 根，这里告诉系统去哪里取
-        CFBundleIcons:
-          CFBundlePrimaryIcon:
-            CFBundleIconFiles:
-              - Icon-180
-              - Icon-120
-              - Icon-167
-              - Icon-152
-              - Icon-1024
-            UIPrerenderedIcon: false
+        # 图标配置由 CI 用 PlistBuddy 写入（单一来源，避免和这里重复）
         UIRequiredDeviceCapabilities:
           - arm64
         UISupportedInterfaceOrientations:
