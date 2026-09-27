@@ -7,6 +7,9 @@ on:
   push:
     paths:
       - "ios/**"
+      # 前端资源会被打进 ipa（由 App 自带的本地服务提供），所以只改 web/ 也要重新出包，
+      # 否则会拿着旧界面测新代码。
+      - "web/**"
       - ".github/workflows/build-ios.yml"
 
 jobs:
