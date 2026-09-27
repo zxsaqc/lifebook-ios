@@ -7,6 +7,9 @@ options:
   bundleIdPrefix: com.lifebook
   deploymentTarget:
     iOS: "14.0"
+  # 关键：显式指定生成 Xcode 15 的工程格式（objectVersion 60）。
+  # 不指定的话 xcodegen 会按最新 Xcode 16 生成（格式 77），旧的 Xcode 15 打不开。
+  xcodeVersion: "15.0"
 
 settings:
   base:

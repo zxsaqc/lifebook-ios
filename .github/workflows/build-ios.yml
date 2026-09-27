@@ -18,6 +18,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Pick newest Xcode
+        continue-on-error: true
+        run: |
+          ls -d /Applications/Xcode_*.app 2>/dev/null || true
+          XC16=$(ls -d /Applications/Xcode_16*.app 2>/dev/null | head -1 || true)
+          if [ -n "$XC16" ]; then sudo xcode-select -s "$XC16"; fi
+          xcodebuild -version
+
       - name: Show toolchain
         run: |
           xcodebuild -version
