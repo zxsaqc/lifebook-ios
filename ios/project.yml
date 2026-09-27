@@ -1,0 +1,55 @@
+# xcodegen 工程描述：CI 上用 `xcodegen generate` 生成 LifeBook.xcodeproj，
+# 避免手写 pbxproj（易出错且难以维护）。
+# 参考：https://github.com/yonaskolb/XcodeGen
+name: LifeBook
+
+options:
+  bundleIdPrefix: com.lifebook
+  deploymentTarget:
+    iOS: "14.0"
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    ENABLE_BITCODE: NO
+    # 未签名构建：ipa 交给 TrollStore 侧载，不走 Apple 签名
+    CODE_SIGNING_ALLOWED: NO
+    CODE_SIGNING_REQUIRED: NO
+    CODE_SIGN_IDENTITY: ""
+    AD_HOC_CODE_SIGNING_ALLOWED: YES
+
+targets:
+  LifeBook:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+    resources:
+      # 明确指向 xcassets，xcodegen 才会按 Asset Catalog 编译（否则只是个普通文件夹）
+      - path: Resources/Assets.xcassets
+    info:
+      path: Info.plist
+      properties:
+        CFBundleDisplayName: LifeBook
+        CFBundleName: LifeBook
+        CFBundleShortVersionString: "1.0.0"
+        CFBundleVersion: "1"
+        LSRequiresIPhoneOS: true
+        # 电脑上跑的是本机 http 服务，必须放行局域网明文流量
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+        UILaunchScreen:
+          UIColorName: LaunchBackground
+        UIRequiredDeviceCapabilities:
+          - arm64
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        ITSAppUsesNonExemptEncryption: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.lifebook.app
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        TARGETED_DEVICE_FAMILY: "1,2"
+        IPHONEOS_DEPLOYMENT_TARGET: "14.0"
