@@ -1,6 +1,6 @@
 // 影视观影视图（apollo 形态）
 import { api } from "../api.js";
-import { $, $$, esc, openSheet, confirmDialog, toast, starPickerHtml, bindStarPicker, today } from "../ui.js";
+import { $, $$, esc, openSheet, confirmDialog, toast, starPickerHtml, bindStarPicker, today, emptyIcon } from "../ui.js";
 
 let meta = { kinds: [], statuses: [] };
 let status = "";
@@ -64,7 +64,7 @@ export const media = {
     const list = $("#md-list", root);
     list.innerHTML = page.items.length
       ? `<div class="rows">${page.items.map(rowHtml).join("")}</div>`
-      : `<div class="empty"><span class="big">🎬</span>还没有观影记录<br />点右下角 ＋ 添加一部</div>`;
+      : `<div class="empty">${emptyIcon("film", 34)}还没有观影记录<br />点右下角 ＋ 添加一部</div>`;
 
     $$("[data-act]", list).forEach((btn) => {
       btn.addEventListener("click", async () => {

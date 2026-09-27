@@ -95,13 +95,22 @@ jobs:
           cp -R ../../web/static/. "$APP/web/"
           test -f "$APP/web/index.html" || (echo "错误：web/index.html 缺失" && exit 1)
           test -f "$APP/web/js/localapi.js" || (echo "错误：本机数据层脚本缺失" && exit 1)
+          # 样式表缺了不会让构建失败，只会让 App 打开后一片裸样式——必须显式挡住
+          test -s "$APP/web/styles.css" || (echo "错误：web/styles.css 缺失或为空" && exit 1)
+          grep -q "prefers-color-scheme" "$APP/web/styles.css" || (echo "错误：样式表缺深色模式" && exit 1)
+          for f in index.html styles.css manifest.webmanifest apple-touch-icon.png icon-192.png; do
+            test -s "$APP/web/$f" || (echo "错误：web/$f 缺失" && exit 1)
+          done
           # 同步、分享、导入都是本机功能，缺一个文件就会静默失效，所以逐个确认
-          for f in sync.js synclocal.js share.js syncui.js importers.js importui.js crypto.js localstore.js rules.js app.js; do
+          for f in ui.js sync.js synclocal.js share.js syncui.js importers.js importui.js crypto.js localstore.js rules.js app.js; do
             test -f "$APP/web/js/$f" || (echo "错误：js/$f 缺失" && exit 1)
           done
           # 确认页面确实引用了这些模块（改动后忘了接线也能在这里挡住）
           grep -q "syncui.js" "$APP/web/js/app.js" || (echo "错误：app.js 未引入同步面板" && exit 1)
           grep -q "importui.js" "$APP/web/js/app.js" || (echo "错误：app.js 未引入导入面板" && exit 1)
+          # 图标改成了内联 SVG，用 currentColor 跟随选中态；退回 emoji 也是靠这条挡住
+          grep -q "currentColor" "$APP/web/index.html" || (echo "错误：导航图标未使用 SVG" && exit 1)
+          grep -q "const ICONS" "$APP/web/js/ui.js" || (echo "错误：ui.js 缺图标库" && exit 1)
           # 导入中转是整个推广逻辑的入口，接口没暴露就等于没做
           grep -q "importApply" "$APP/web/js/localapi.js" || (echo "错误：导入接口未暴露" && exit 1)
           grep -q "localapi.js" "$APP/web/js/api.js" || (echo "错误：api.js 未指向本机实现" && exit 1)

@@ -1,7 +1,7 @@
 // 账号本子视图
 import { api } from "../api.js";
 import {
-  $, $$, esc, openSheet, confirmDialog, toast, today,
+  $, $$, esc, openSheet, confirmDialog, toast, today, emptyIcon,
 } from "../ui.js";
 
 let categories = [];
@@ -64,7 +64,7 @@ export const accounts = {
 
     const list = $("#ac-list", root);
     if (!page.items.length) {
-      list.innerHTML = `<div class="empty"><span class="big">🔐</span>还没有账号记录<br />点右下角 ＋ 添加第一个</div>`;
+      list.innerHTML = `<div class="empty">${emptyIcon("key", 34)}还没有账号记录<br />点右下角 ＋ 添加第一个</div>`;
       return;
     }
     list.innerHTML = `<div class="rows">${page.items.map(rowHtml).join("")}</div>`;

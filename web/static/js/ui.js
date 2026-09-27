@@ -156,3 +156,41 @@ export function bindStarPicker(root) {
     });
   });
 }
+
+/* ---------------- 图标 ----------------
+   统一一套线条图标，而不是用 emoji：
+   emoji 由各平台字体决定长相，iPhone 上是彩色的、安卓上是另一套、Windows 又是第三套，
+   同一排里风格互相打架。这里的图标走 currentColor，颜色由外层的 .ico-tile 决定。
+   新增图标只需往下面的表里加一条路径，注意画布固定 20×20。 */
+
+const ICONS = {
+  today:
+    '<circle cx="10" cy="10" r="6.5"/><circle cx="10" cy="10" r="2" fill="currentColor" stroke="none"/>',
+  clock: '<circle cx="10" cy="10" r="6.5"/><path d="M10 6.2V10l2.6 1.8"/>',
+  card: '<rect x="2.8" y="4.6" width="14.4" height="10.8" rx="2.4"/><path d="M2.8 8.4h14.4"/>',
+  key: '<circle cx="7.2" cy="10" r="3.2"/><path d="M10.4 10H17"/><path d="M14.2 10v2.6"/>',
+  film: '<rect x="2.6" y="4.8" width="14.8" height="10.4" rx="2"/><path d="M8.4 7.9l4 2.1-4 2.1z" fill="currentColor" stroke="none"/>',
+  receipt:
+    '<path d="M5 2.8h10v14.4l-2.5-1.6-2.5 1.6-2.5-1.6L5 17.2z"/><path d="M8 7.4h4"/><path d="M8 10.6h4"/>',
+  bookmark: '<path d="M5.6 3.2h8.8v13.6l-4.4-3.2-4.4 3.2z"/>',
+  sun: '<circle cx="10" cy="10" r="3.5"/><path d="M10 2.8v1.8M10 15.4v1.8M2.8 10h1.8M15.4 10h1.8M5.1 5.1l1.3 1.3M13.6 13.6l1.3 1.3M14.9 5.1l-1.3 1.3M6.4 13.6l-1.3 1.3"/>',
+  sparkle: '<path d="M10 3.4l1.6 4.9 4.9 1.6-4.9 1.6L10 16.6l-1.6-4.9L3.5 10l4.9-1.7z"/>',
+};
+
+/** 取一枚图标。name 不存在时回退到 today，不会渲染出空白。 */
+export function icon(name, size = 20) {
+  const body = ICONS[name] || ICONS.today;
+  return `<svg width="${size}" height="${size}" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
+}
+
+/** 淡色底 + 同色系线条的方块图标，列表行左侧用。tint 取 brand/expense/income/amber/violet */
+export function iconTile(name, tint = "brand", size = 18) {
+  return `<span class="ico-tile tint-${tint}">${icon(name, size)}</span>`;
+}
+
+/** 空状态用的大号图标 */
+export function emptyIcon(name, size = 32) {
+  return `<span class="empty-ico">${icon(name, size)}</span>`;
+}
+
+export const ICON_NAMES = Object.keys(ICONS);

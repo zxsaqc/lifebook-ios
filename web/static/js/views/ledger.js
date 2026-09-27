@@ -2,7 +2,7 @@
 import { api } from "../api.js";
 import {
   $, $$, esc, money, moneyShort, openSheet, confirmDialog, toast,
-  prettyDate, nowMonth, nowDateTimeLocal, today,
+  prettyDate, nowMonth, nowDateTimeLocal, today, emptyIcon,
 } from "../ui.js";
 
 let categories = [];
@@ -22,7 +22,7 @@ export const ledger = {
       <div class="hero" id="lg-hero"><div class="hero-label">本月支出</div><div class="hero-value">—</div></div>
       <div class="stats-grid">
         <div class="stat green" id="lg-income"><div class="label">收入</div><div class="value">—</div></div>
-        <div class="stat purple" id="lg-sub"><div class="label">💳 会员订阅 / 月</div><div class="value">—</div><div class="foot" id="lg-sub-foot"></div></div>
+        <div class="stat purple" id="lg-sub"><div class="label">会员订阅 / 月</div><div class="value">—</div><div class="foot" id="lg-sub-foot"></div></div>
         <div class="stat brand" id="lg-ai"><div class="label">AI 命中率</div><div class="value">—</div><div class="foot">自动打标占比</div></div>
         <div class="stat orange" id="lg-top"><div class="label">最大开销</div><div class="value">—</div></div>
       </div>
@@ -88,7 +88,7 @@ export const ledger = {
 
     const list = $("#lg-list", root);
     if (!page.items.length) {
-      list.innerHTML = `<div class="empty"><span class="big">🧾</span>还没有账单<br />点右下角 ＋ 记一笔</div>`;
+      list.innerHTML = `<div class="empty">${emptyIcon("receipt", 34)}还没有账单<br />点右下角 ＋ 记一笔</div>`;
       return;
     }
     list.innerHTML = page.items.map(rowHtml).join("");

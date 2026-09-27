@@ -1,6 +1,6 @@
 // 总览「今天」：把四个模块的一天汇聚在一屏
 import { api } from "../api.js";
-import { esc, money, hoursText, toast, today, prettyDate } from "../ui.js";
+import { esc, money, hoursText, toast, today, prettyDate, iconTile, emptyIcon } from "../ui.js";
 
 export const dashboard = {
   id: "dashboard",
@@ -55,7 +55,7 @@ export const dashboard = {
 
     const rows = [];
     (d?.sessions || []).forEach((s) => rows.push({
-      icon: "⏱",
+      tile: iconTile("clock", "brand"),
       title: `${s.project} · ${hoursText(s.minutes)}`,
       sub: s.content || "记了一段工时",
       amount: "",
@@ -65,7 +65,10 @@ export const dashboard = {
     (txPage?.items || [])
       .filter((t) => String(t.paid_at).startsWith(day))
       .forEach((t) => rows.push({
-        icon: t.is_subscription ? "💳" : "🧾",
+        tile: iconTile(
+          t.is_subscription ? "card" : "receipt",
+          t.direction === "income" ? "income" : t.is_subscription ? "amber" : "expense"
+        ),
         title: `${t.feeling ? t.feeling + " " : ""}${t.merchant || t.category_label}`,
         sub: `${t.category_label}${t.idea ? ` · ${t.idea}` : ""}`,
         amount: `${t.direction === "income" ? "+" : "−"}${money(t.amount_minor).slice(1)}`,
@@ -74,7 +77,7 @@ export const dashboard = {
 
     const recentMedia = await api.listMedia({ sort: "watched_on", limit: 3 }).catch(() => null);
     (recentMedia?.items || []).forEach((m) => rows.push({
-      icon: "🎬",
+      tile: iconTile("film", "violet"),
       title: `${m.title} ${m.stars}`,
       sub: `${m.kind_label}${m.review ? ` · ${m.review}` : ""}`,
       amount: "",
@@ -83,14 +86,14 @@ export const dashboard = {
     $("#db-today", root).innerHTML = rows.length
       ? `<div class="rows">${rows.map((r) => `
           <div class="row">
-            <div style="font-size:18px;width:26px;text-align:center">${r.icon}</div>
+            ${r.tile}
             <div class="row-main">
               <div class="row-title">${esc(r.title)}</div>
               <div class="row-sub">${esc(r.sub)}</div>
             </div>
             ${r.amount ? `<div class="row-amt ${r.cls || ""}">${esc(r.amount)}</div>` : ""}
           </div>`).join("")}</div>`
-      : `<div class="empty"><span class="big">🌤</span>今天还是空白<br />去记一笔工时、账单或影视吧</div>`;
+      : `<div class="empty">${emptyIcon("sun", 34)}今天还是空白<br />去记一笔工时、账单或影视吧</div>`;
 
     $("#db-journal", root).innerHTML = d?.journal
       ? `<div class="row-title">${esc(prettyDate(d.journal.day))} 的想法</div>

@@ -1,6 +1,6 @@
 // 工时视图：今天投入多久 + 当日想法
 import { api } from "../api.js";
-import { $, $$, esc, openSheet, toast, hoursText, today, prettyDate } from "../ui.js";
+import { $, $$, esc, openSheet, toast, hoursText, today, prettyDate, emptyIcon } from "../ui.js";
 
 let day = today();
 let projects = [];
@@ -121,7 +121,7 @@ export const hours = {
             </div>
             <button class="btn sm danger" data-act="del">删除</button>
           </div>`).join("")}</div>`
-      : `<div class="empty"><span class="big">⏱</span>今天还没有记录工时<br />点右下角 ＋ 记一段</div>`;
+      : `<div class="empty">${emptyIcon("clock", 34)}今天还没有记录工时<br />点右下角 ＋ 记一段</div>`;
 
     $$("[data-act=del]", list).forEach((btn) => {
       btn.addEventListener("click", async () => {
