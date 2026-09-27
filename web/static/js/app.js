@@ -6,6 +6,7 @@ import { hours } from "./views/hours.js";
 import { ledger } from "./views/ledger.js";
 import { accounts } from "./views/accounts.js";
 import { media } from "./views/media.js";
+import { openShareSheet, openSyncSheet } from "./syncui.js";
 
 // 说明：不再注册 Service Worker。
 // 数据已经完全在本机，页面资源也由 App 自带的本地服务提供，不需要离线缓存；
@@ -183,7 +184,17 @@ function openDataSheet() {
             不会上传到任何服务器。主口令本身不落盘，忘记就无法解开。
           </p>
 
-          <div class="section-title" style="margin-top:14px">1. 导出备份</div>
+          <div class="section-title" style="margin-top:14px">同步与分享</div>
+          <p class="hintline">
+            云同步上传的是<strong>密文</strong>；分享给别人时用单独的一次性口令，
+            <strong>永远不要把主口令给别人</strong>。
+          </p>
+          <div style="display:flex;gap:10px">
+            <button class="btn ghost" id="bk-sync">云同步设置</button>
+            <button class="btn ghost" id="bk-share">分享给别人</button>
+          </div>
+
+          <div class="section-title" style="margin-top:18px">1. 导出备份</div>
           <p class="hintline">手机丢了或换机时用它恢复。备份串已加密，可以放心存到备忘录或发给自己。</p>
           <label class="field"><span>备份口令（至少 6 位，请自己记住）</span>
             <input type="password" id="bk-pw" placeholder="用于加密这份备份" />
@@ -210,6 +221,18 @@ function openDataSheet() {
   $(".mask", host).addEventListener("click", (e) => {
     if (e.target.classList.contains("mask")) close();
   });
+
+  // 从「数据」面板跳到另一个面板：先关掉自己，避免两层遮罩叠在一起
+  const hop = (open) => {
+    close();
+    try {
+      open();
+    } catch (err) {
+      handleError(err);
+    }
+  };
+  $("#bk-sync", host).addEventListener("click", () => hop(openSyncSheet));
+  $("#bk-share", host).addEventListener("click", () => hop(openShareSheet));
 
   api.localUsage()
     .then((u) => {
@@ -249,6 +272,14 @@ function openDataSheet() {
 }
 
 $("#data-btn").addEventListener("click", openDataSheet);
+$("#sync-btn").addEventListener("click", () => {
+  // 面板内部自己会处理错误并显示，这里只兜住「整个面板都打不开」的情况
+  try {
+    openSyncSheet();
+  } catch (err) {
+    toast(err?.message || "无法打开同步设置", "error");
+  }
+});
 
 window.addEventListener("api-error", (e) => handleError(e.detail));
 window.addEventListener("unhandledrejection", (e) => handleError(e.reason));

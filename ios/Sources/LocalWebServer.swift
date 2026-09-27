@@ -1,18 +1,28 @@
 import Foundation
 import Network
 
-/// App 自带的极简 HTTP 静态服务器：只服务打包进来的 web 资源，只监听回环地址。
+/// App 自带的极简 HTTP 服务，只监听回环地址。干两件事：
 ///
-/// 为什么必须这么做（而不是直接加载本地文件）：
-/// - 浏览器只在**安全上下文**下提供加密接口（`crypto.subtle`）。`file://` 不算，
-///   `http://localhost` / `http://127.0.0.1` 算。数据要靠它加密，所以必须有这个本地服务；
-/// - 页面来源固定在 127.0.0.1，浏览器的本地数据库（IndexedDB）才有稳定归属，
-///   升级 App 不会丢数据。
+/// 1. **服务静态资源**（打包进来的 `web/` 目录）。
+///    为什么必须这么做（而不是直接加载本地文件）：
+///    - 浏览器只在**安全上下文**下提供加密接口（`crypto.subtle`）。`file://` 不算，
+///      `http://127.0.0.1` 算。数据要靠它加密，所以必须有这个本地服务；
+///    - 页面来源固定在 127.0.0.1，浏览器的本地数据库（IndexedDB）才有稳定归属，
+///      升级 App 不会丢数据。
 ///
-/// 只监听 loopback，外部设备无法访问；不做 keep-alive，静态资源场景足够。
+/// 2. **转发 WebDAV 请求**（`/__sync__`）。
+///    云同步要访问坚果云 / Nextcloud 这类 WebDAV，但它们几乎都不返回 CORS 头，
+///    网页里直接 fetch 会被浏览器拦掉。原生这侧没有同源限制，所以由它代劳。
+///    这个代理只对回环连接开放，外部设备连不上。
+///
+/// 只监听 loopback，不做 keep-alive，个人使用场景足够。
 final class LocalWebServer {
 
     static let shared = LocalWebServer()
+
+    /// 请求体上限。附件是压缩后的 JPEG，留足余量。
+    private static let maxRequestBytes = 48 * 1024 * 1024
+    private static let pingToken = "lifebook-sync-proxy"
 
     private let queue = DispatchQueue(label: "com.lifebook.webserver", qos: .userInitiated)
     private var listener: NWListener?
@@ -102,40 +112,118 @@ final class LocalWebServer {
 
     private func accept(_ connection: NWConnection) {
         connection.start(queue: queue)
-        readRequest(connection, buffer: Data())
+        readRequest(connection, buffer: NSMutableData())
     }
 
-    private func readRequest(_ connection: NWConnection, buffer: Data) {
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) {
+    /// 先读到请求头结束，再看 Content-Length 决定要不要继续读请求体。
+    ///
+    /// 用 NSMutableData（引用类型）而不是 Data（值类型）累积：值是每次 append 都要
+    /// 整份拷贝，几 MB 的同步日志会退化成 O(n²)。
+    private func readRequest(_ connection: NWConnection, buffer: NSMutableData) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 256 * 1024) {
             [weak self] data, _, isComplete, error in
             guard let self = self else { connection.cancel(); return }
-            var accumulated = buffer
-            if let data = data { accumulated.append(data) }
+            if let data = data { buffer.append(data) }
 
-            if let headerEnd = accumulated.range(of: Data("\r\n\r\n".utf8)) {
-                let head = String(decoding: accumulated[..<headerEnd.lowerBound], as: UTF8.self)
-                self.respond(connection, requestHead: head)
-                return
-            }
-            if isComplete || error != nil || accumulated.count > 512 * 1024 {
+            if buffer.length > Self.maxRequestBytes {
                 connection.cancel()
                 return
             }
-            self.readRequest(connection, buffer: accumulated)
+
+            let headerBreak = Self.headerBreakRange(in: buffer)
+            guard headerBreak.location != NSNotFound else {
+                if isComplete || error != nil {
+                    connection.cancel()
+                    return
+                }
+                self.readRequest(connection, buffer: buffer)
+                return
+            }
+
+            let headLength = headerBreak.location
+            let head = String(decoding: buffer.subdata(with: NSRange(location: 0, length: headLength)), as: UTF8.self)
+            let bodyStart = headLength + headerBreak.length
+            let expected = Self.contentLength(of: head)
+            let have = buffer.length - bodyStart
+
+            if have >= expected {
+                let body = buffer.subdata(with: NSRange(location: bodyStart, length: expected))
+                self.route(connection, requestHead: head, body: body)
+                return
+            }
+            if isComplete || error != nil {
+                connection.cancel()
+                return
+            }
+            self.readRequest(connection, buffer: buffer)
         }
     }
 
-    private func respond(_ connection: NWConnection, requestHead: String) {
+    private static let headerBreak = Data("\r\n\r\n".utf8)
+
+    private static func headerBreakRange(in buffer: NSMutableData) -> NSRange {
+        buffer.range(of: headerBreak, options: [], in: NSRange(location: 0, length: buffer.length))
+    }
+
+    private static func contentLength(of head: String) -> Int {
+        for line in head.components(separatedBy: "\r\n") {
+            let parts = line.split(separator: ":", maxSplits: 1).map(String.init)
+            guard parts.count == 2 else { continue }
+            if parts[0].trimmingCharacters(in: .whitespaces).lowercased() == "content-length" {
+                return max(0, Int(parts[1].trimmingCharacters(in: .whitespaces)) ?? 0)
+            }
+        }
+        return 0
+    }
+
+    private static func parseHeaders(_ lines: [String]) -> [String: String] {
+        var out: [String: String] = [:]
+        for (i, line) in lines.enumerated() {
+            if i == 0 { continue } // 请求行
+            let parts = line.split(separator: ":", maxSplits: 1).map(String.init)
+            guard parts.count == 2 else { continue }
+            let key = parts[0].trimmingCharacters(in: .whitespaces).lowercased()
+            out[key] = parts[1].trimmingCharacters(in: .whitespaces)
+        }
+        return out
+    }
+
+    // MARK: - 路由
+
+    private func route(_ connection: NWConnection, requestHead: String, body: Data) {
         let lines = requestHead.components(separatedBy: "\r\n")
-        let requestLine = lines.first ?? ""
-        let parts = requestLine.split(separator: " ").map(String.init)
-        let method = parts.count > 0 ? parts[0] : "GET"
+        let parts = (lines.first ?? "").split(separator: " ").map(String.init)
+        let method = parts.count > 0 ? parts[0].uppercased() : "GET"
         var path = parts.count > 1 ? parts[1] : "/"
 
         if let q = path.firstIndex(of: "?") { path = String(path[..<q]) }
         path = path.removingPercentEncoding ?? path
 
-        guard method == "GET" || method == "HEAD" else {
+        // 供网页端探测「代理在不在」
+        if path == "/__sync__/ping" {
+            send(connection, status: "200 OK", body: Data(Self.pingToken.utf8),
+                 type: "text/plain; charset=utf-8")
+            return
+        }
+
+        // WebDAV 转发
+        if path == "/__sync__" {
+            guard method == "POST" else {
+                send(connection, status: "405 Method Not Allowed",
+                     body: Data("Method Not Allowed".utf8), type: "text/plain; charset=utf-8")
+                return
+            }
+            // 转发要等远端响应，可能几十秒。队列是串行的，如果就地等，同步期间
+            // 页面发起的其它资源请求会一起卡住。所以挪到独立队列去等。
+            let headers = Self.parseHeaders(lines)
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                self?.forward(connection, headers: headers, body: body)
+            }
+            return
+        }
+
+        // 静态资源
+        if method != "GET" && method != "HEAD" {
             send(connection, status: "405 Method Not Allowed",
                  body: Data("Method Not Allowed".utf8), type: "text/plain; charset=utf-8")
             return
@@ -163,6 +251,93 @@ final class LocalWebServer {
         send(connection, status: "200 OK", body: data,
              type: Self.mimeType(for: path), cacheControl: "no-store")
     }
+
+    // MARK: - WebDAV 转发
+
+    /// 请求头里带目标信息：
+    ///   X-Dav-Url     目标地址（必填）
+    ///   X-Dav-Method  真正要用的方法，默认 GET
+    ///   X-Dav-Auth    已经算好的 Authorization 值
+    /// 响应固定回 200，真实的状态码放在 X-Dav-Status 里 —— 这样外层不会被
+    /// 「非 2xx 就报错」的通用逻辑带偏，由网页端自己判断。
+    private func forward(_ connection: NWConnection, headers: [String: String], body: Data) {
+        guard let raw = headers["x-dav-url"], let url = URL(string: raw),
+              let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https"
+        else {
+            sendJson(connection, code: 400, error: "bad_target")
+            return
+        }
+
+        var req = URLRequest(url: url)
+        req.httpMethod = headers["x-dav-method"] ?? "GET"
+        req.timeoutInterval = 60
+        if let auth = headers["x-dav-auth"], !auth.isEmpty {
+            req.setValue(auth, forHTTPHeaderField: "Authorization")
+        }
+        if let depth = headers["depth"] {
+            req.setValue(depth, forHTTPHeaderField: "Depth")
+        }
+        req.setValue(headers["content-type"] ?? "application/octet-stream",
+                     forHTTPHeaderField: "Content-Type")
+        // 有些服务器依赖 Content-Length 才认 PUT
+        req.setValue(String(body.count), forHTTPHeaderField: "Content-Length")
+        if !body.isEmpty { req.httpBody = body }
+
+        let semaphore = DispatchSemaphore(value: 0)
+        // 用引用类型承载结果：闭包里改属性不需要捕获 var，跨线程更干净
+        let outcome = ProxyOutcome()
+
+        let task = URLSession.shared.dataTask(with: req) { data, response, _ in
+            if let http = response as? HTTPURLResponse {
+                outcome.status = http.statusCode
+                outcome.etag = http.value(forHTTPHeaderField: "ETag") ?? ""
+            } else {
+                outcome.failed = true
+            }
+            if let data = data { outcome.body = data }
+            semaphore.signal()
+        }
+        task.resume()
+
+        // URLSession 的回调在自己的队列上跑，不会和我们这条队列互等。
+        // 信号量同时提供了 happens-before 关系，之后读 outcome 是安全的。
+        if semaphore.wait(timeout: .now() + 70) == .timedOut {
+            task.cancel()
+            sendJson(connection, code: 504, error: "timeout")
+            return
+        }
+        if outcome.failed {
+            sendJson(connection, code: 502, error: "upstream_unreachable")
+            return
+        }
+
+        var header = "HTTP/1.1 200 OK\r\n"
+        header += "Content-Type: application/octet-stream\r\n"
+        header += "X-Dav-Status: \(outcome.status)\r\n"
+        header += "X-Dav-Etag: \(Self.headerSafe(outcome.etag))\r\n"
+        header += "Content-Length: \(outcome.body.count)\r\n"
+        header += "Cache-Control: no-store\r\n"
+        header += "Connection: close\r\n\r\n"
+
+        var out = Data(header.utf8)
+        out.append(outcome.body)
+        connection.send(content: out, completion: .contentProcessed { _ in
+            connection.cancel()
+        })
+    }
+
+    /// ETag 里偶尔会有奇怪字符，放进响应头前先过滤成 ASCII。
+    private static func headerSafe(_ text: String) -> String {
+        String(text.unicodeScalars.filter { $0.isASCII }.map(Character.init))
+    }
+
+    private func sendJson(_ connection: NWConnection, code: Int, error: String) {
+        let body = Data("{\"error\":\"\(error)\"}".utf8)
+        send(connection, status: "\(code) Error", body: body,
+             type: "application/json; charset=utf-8")
+    }
+
+    // MARK: - 响应
 
     private func send(
         _ connection: NWConnection,
@@ -203,4 +378,14 @@ final class LocalWebServer {
         default: return "application/octet-stream"
         }
     }
+}
+
+/// 转发结果。用引用类型是为了让 URLSession 的回调里能直接写属性，
+/// 不必捕获 var（跨线程更清爽，也免得以后开严格并发检查时报错）。
+/// 读写之间有信号量保证顺序，不存在数据竞争。
+private final class ProxyOutcome {
+    var status = 0
+    var body = Data()
+    var etag = ""
+    var failed = false
 }

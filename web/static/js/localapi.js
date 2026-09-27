@@ -17,6 +17,7 @@ import {
   exportBackup,
   hardDelete,
   hardDeleteMany,
+  identity,
   importBackup,
   init,
   list,
@@ -24,6 +25,7 @@ import {
   nowIso,
   prefs,
   put,
+  renameDevice,
   savePrefs,
   setup as setupVault,
   uid,
@@ -31,6 +33,17 @@ import {
   usage,
   vault,
 } from "./localstore.js";
+import { ShareError, buildShare, peekShare, readShare, slimRecords } from "./share.js";
+import { SyncError } from "./sync.js";
+import {
+  deleteSyncConfig,
+  syncAdopt,
+  syncConfigure,
+  syncInspect,
+  syncPublish,
+  syncRun,
+  syncStatus,
+} from "./synclocal.js";
 
 const ERROR_MESSAGES = {
   validation_error: "提交的数据不合法，请检查后重试",
@@ -45,6 +58,21 @@ const ERROR_MESSAGES = {
   duplicate_entry: "已存在相同记录",
   offline: "本机数据不可用，请重试",
   secure_context_required: "当前环境不支持加密存储，请通过 App 或本机地址打开",
+  // 云同步
+  not_configured: "还没有配置同步服务器",
+  bad_config: "服务器地址或账号格式不对，请检查",
+  backend_error: "同步服务器拒绝了这次请求，请稍后重试",
+  transport_error: "连不上同步服务器，请检查地址与网络",
+  no_repo: "云端还没有账库，请先「首次上传」",
+  vault_mismatch: "本机账库与云端账库不是同一个",
+  bad_repo: "这个目录不是 LifeBook 的同步目录",
+  bad_state: "账库状态不完整，请重新解锁后再试",
+  bad_device_id: "设备标识不合法",
+  // 分享
+  share_expired: "这个分享已过期，请让对方重新生成",
+  share_tampered: "分享内容被修改过，已拒绝打开",
+  empty_share: "所选范围内没有可分享的内容",
+  bad_share: "这不是 LifeBook 的分享内容",
 };
 
 const STATUS_BY_CODE = {
@@ -59,6 +87,16 @@ const STATUS_BY_CODE = {
   conflict: 409,
   duplicate_entry: 409,
   secure_context_required: 500,
+  not_configured: 409,
+  bad_config: 422,
+  no_repo: 404,
+  vault_mismatch: 409,
+  bad_repo: 422,
+  bad_state: 409,
+  share_expired: 410,
+  share_tampered: 422,
+  empty_share: 422,
+  bad_share: 422,
 };
 
 export class ApiError extends Error {
@@ -69,7 +107,9 @@ export class ApiError extends Error {
     this.details = details || {};
   }
   get friendly() {
-    return ERROR_MESSAGES[this.code] || this.message || "操作失败，请稍后重试";
+    // 显式给出的说明优先于通用文案：同样是 weak_password，
+    // 「备份口令至少 6 位」比「至少 8 位且包含字母和数字」有用得多。
+    return this.message || ERROR_MESSAGES[this.code] || "操作失败，请稍后重试";
   }
 }
 
@@ -80,7 +120,9 @@ function wrap(fn) {
       return await fn(...args);
     } catch (err) {
       if (err instanceof ApiError) throw err;
-      if (err instanceof LocalError) throw new ApiError(err.code, err.message);
+      if (err instanceof LocalError || err instanceof SyncError || err instanceof ShareError) {
+        throw new ApiError(err.code, err.message);
+      }
       if (err && err.message === "SECURE_CONTEXT_REQUIRED") {
         throw new ApiError("secure_context_required", ERROR_MESSAGES.secure_context_required, 500);
       }
@@ -1005,7 +1047,68 @@ export const api = {
   }),
   localPrefs: wrap(async () => clone(prefs())),
   localSavePrefs: wrap(async (patch) => savePrefs(patch || {})),
+
+  /* -------- 云同步（App 专属）-------- */
+  // 注意：所有数据在离开本机之前就已经加密，服务器上只有密文。
+  syncStatus: wrap(async () => syncStatus()),
+  syncConfigure: wrap(async (payload = {}) => syncConfigure(payload)),
+  syncInspect: wrap(async () => syncInspect()),
+  syncPublish: wrap(async (opts = {}) => syncPublish(opts)),
+  syncAdopt: wrap(async (opts = {}) => syncAdopt(opts)),
+  syncRun: wrap(async () => syncRun()),
+  syncDisconnect: wrap(async () => deleteSyncConfig()),
+  syncRenameDevice: wrap(async (name) => ({ device_name: await renameDevice(name) })),
+
+  /* -------- 加密分享 -------- */
+  sharePreview: wrap(async (payload = {}) => sharePreview(payload)),
+  shareCreate: wrap(async (payload = {}) => shareCreate(payload)),
+  sharePeek: wrap(async (text) => peekShare(text)),
+  shareOpen: wrap(async (password, text) => readShare(password, text)),
 };
+
+/** 可以对外分享的类别。账号清单会**自动去掉口令和两步验证密钥**。 */
+const SHAREABLE = ["account", "transaction", "session", "journal", "media"];
+
+/** 按类别（可选再按月过滤）挑出要分享的记录，并裁掉内部字段。 */
+function collectShareData({ kinds = [], month = "" } = {}) {
+  const picked = (Array.isArray(kinds) ? kinds : []).filter((k) => SHAREABLE.includes(k));
+  const data = {};
+  for (const kind of picked) {
+    let rows = alive(list(kind));
+    if (month) {
+      const m = String(month).slice(0, 7);
+      rows = rows.filter((r) =>
+        kind === "transaction" ? monthOf(r.paid_at) === m : String(r.day || "").startsWith(m)
+      );
+    }
+    data[kind] = slimRecords(kind, rows);
+  }
+  return data;
+}
+
+function sharePreview(payload) {
+  const data = collectShareData(payload);
+  const counts = {};
+  let total = 0;
+  for (const [kind, rows] of Object.entries(data)) {
+    counts[kind] = rows.length;
+    total += rows.length;
+  }
+  return { counts, total };
+}
+
+async function shareCreate(payload = {}) {
+  const data = collectShareData(payload);
+  const total = Object.values(data).reduce((n, rows) => n + rows.length, 0);
+  if (!total) throw new ApiError("empty_share", "所选范围内没有记录");
+  const text = await buildShare(payload.password, {
+    data,
+    note: payload.note || "",
+    ttlDays: Number(payload.ttlDays ?? 7),
+    fromDevice: identity().deviceName,
+  });
+  return { payload: text, total, counts: sharePreview(payload).counts };
+}
 
 const MEDIA_KINDS = { movie: "电影", tv: "剧集", doc: "纪录片", anime: "动画" };
 const MEDIA_STATUSES = { plan: "想看", watching: "在看", done: "看完", dropped: "弃了" };

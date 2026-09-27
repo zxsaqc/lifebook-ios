@@ -28,7 +28,17 @@ const DB_VERSION = 1;
 const STORE_META = "meta";
 const STORE_RECORDS = "records";
 
-export const KINDS = ["account", "transaction", "attachment", "session", "journal", "media", "rule"];
+export const KINDS = [
+  "account",
+  "transaction",
+  "attachment",
+  "session",
+  "journal",
+  "media",
+  "rule",
+  // 设置项（例如同步用的服务器地址与凭据）。不参与云同步，只留本机。
+  "setting",
+];
 
 /** 全库内存态。锁定后除 meta 外全部清空。 */
 export const vault = {
@@ -123,6 +133,61 @@ export function clone(value) {
   return value === undefined ? value : JSON.parse(JSON.stringify(value));
 }
 
+/* ---------------- 身份 ---------------- */
+
+/** 设备名只是给人看的标签，方便分辨「这条是哪台设备改的」。 */
+function guessDeviceName() {
+  const ua = (typeof navigator !== "undefined" && navigator.userAgent) || "";
+  if (/iPhone/i.test(ua)) return "iPhone";
+  if (/iPad/i.test(ua)) return "iPad";
+  if (/Android/i.test(ua)) return "Android";
+  if (/Macintosh/i.test(ua)) return "Mac";
+  if (/Windows/i.test(ua)) return "Windows";
+  return "本机";
+}
+
+/**
+ * 读取（必要时生成）账库与设备身份。三者都不是秘密，明文存在 meta 里。
+ *
+ * - vaultId  标识「这是同一个账库」，同步的两端必须一致；
+ * - deviceId 用于在云端占一份只属于自己的日志文件，从结构上避免写冲突；
+ * - deviceName 仅用于显示。
+ */
+async function loadIdentity() {
+  let vaultId = await metaGet("vaultId");
+  if (!vaultId) {
+    vaultId = uid();
+    await metaSet("vaultId", vaultId);
+  }
+  let deviceId = await metaGet("deviceId");
+  if (!deviceId) {
+    deviceId = uid();
+    await metaSet("deviceId", deviceId);
+  }
+  let deviceName = await metaGet("deviceName");
+  if (!deviceName) {
+    deviceName = guessDeviceName();
+    await metaSet("deviceName", deviceName);
+  }
+  return { vaultId, deviceId, deviceName };
+}
+
+export function identity() {
+  return {
+    vaultId: vault.meta.vaultId,
+    deviceId: vault.meta.deviceId,
+    deviceName: vault.meta.deviceName,
+  };
+}
+
+export async function renameDevice(name) {
+  const clean = String(name || "").trim().slice(0, 24);
+  if (!clean) throw new LocalError("validation_error", "设备名不能为空");
+  vault.meta.deviceName = clean;
+  await metaSet("deviceName", clean);
+  return clean;
+}
+
 /* ---------------- 生命周期 ---------------- */
 
 /** 读元数据判断是否已经设过主口令。 */
@@ -132,8 +197,9 @@ export async function init() {
   }
   const salt = await metaGet("salt");
   const verifier = await metaGet("verifier");
+  const ident = await loadIdentity();
   vault.initialized = Boolean(salt && verifier);
-  vault.meta = { salt, verifier, prefs: (await metaGet("prefs")) || {} };
+  vault.meta = { salt, verifier, prefs: (await metaGet("prefs")) || {}, ...ident };
   vault.unlocked = false;
   vault.key = null;
   vault.data = emptyData();
@@ -149,9 +215,10 @@ export async function setup(password) {
   const salt = newSalt();
   const key = await deriveKey(password, saltBytes(salt));
   const verifier = await makeVerifier(key);
+  const ident = await loadIdentity();
   await metaSet("salt", salt);
   await metaSet("verifier", verifier);
-  vault.meta = { salt, verifier, prefs: {} };
+  vault.meta = { salt, verifier, prefs: {}, ...ident };
   vault.initialized = true;
   vault.key = key;
   vault.unlocked = true;
@@ -249,6 +316,138 @@ export async function hardDeleteMany(ids) {
 export function list(kind) {
   requireKey();
   return vault.data[kind] || [];
+}
+
+/* ---------------- 同步支撑 ---------------- */
+
+/** 当前账库密钥的加解密操作，交给同步引擎使用（密钥本身不外传）。 */
+export function cryptoOps() {
+  const key = requireKey();
+  return {
+    encrypt: (plain) => encryptString(key, plain),
+    decrypt: (cipher) => decryptString(key, cipher),
+  };
+}
+
+/**
+ * 全部明文记录，按类别分组。仅用于同步时重新编码，不对外暴露。
+ *
+ * 刻意**排除 setting**：那里面放着同步服务器的地址与凭据，属于本机私事，
+ * 不该跟着账库一起上云。多一层排除，以后就算有人往同步类别里加东西也不会误传。
+ */
+export function localRecords() {
+  requireKey();
+  const out = {};
+  for (const kind of KINDS) {
+    if (kind === "setting") continue;
+    out[kind] = vault.data[kind] || [];
+  }
+  return out;
+}
+
+/**
+ * 把云端行落到本机。
+ *
+ * 因为两台设备共享同一个账库密钥，落盘时**不需要重新加密**——直接 put() 即可，
+ * put() 会顺手写好内存索引和密文。
+ */
+export async function applyRows(items) {
+  requireKey();
+  const stats = { upsert: 0, skipped: 0 };
+  for (const { row, payload } of items) {
+    const kind = payload?.k;
+    const record = payload?.r;
+    if (!kind || !vault.data[kind] || !record || record.id !== row.i) {
+      stats.skipped += 1;
+      continue;
+    }
+    await put(kind, record);
+    stats.upsert += 1;
+  }
+  return stats;
+}
+
+/**
+ * 加入已有账库：改用云端账库的 salt 重新派生密钥。
+ *
+ * 这一步是整个同步方案的关键。两台设备各自随机生成 salt，所以同一个主口令
+ * 会在两台设备上派生出**不同的密钥**，谁也解不开谁的数据。加入时统一成云端
+ * 的 salt，之后两台设备才算共用一把钥匙。
+ *
+ * salt 一旦改变，本机原先的密文就作废了，必须用新密钥整体重写一遍——
+ * 好在解锁状态下明文就在内存里，不需要用户重新输入。
+ */
+export async function adoptVault({ salt, verifier, vaultId, password }) {
+  if (!salt || !verifier || !vaultId) {
+    throw new LocalError("bad_state", "云端账库信息不完整");
+  }
+  const key = await deriveKey(password, saltBytes(salt));
+  if (!(await verifyKey(key, verifier))) {
+    throw new LocalError(
+      "invalid_credential",
+      "主口令与云端账库不一致，请确认两台设备用的是同一个主口令"
+    );
+  }
+
+  const sameSalt = vault.meta.salt === salt;
+  const carried = vault.data;
+  const ident = await loadIdentity();
+
+  vault.key = key;
+  vault.unlocked = true;
+  vault.initialized = true;
+  // 注意先展开 ident 再覆盖 vaultId：ident 里带的是**本机原来**的 vaultId，
+  // 展开顺序反了会把刚写入的云端 vaultId 又冲掉。
+  vault.meta = {
+    ...vault.meta,
+    ...ident,
+    vaultId,
+    salt,
+    verifier,
+    prefs: vault.meta.prefs || {},
+  };
+  await metaSet("salt", salt);
+  await metaSet("verifier", verifier);
+  await metaSet("vaultId", vaultId);
+
+  if (sameSalt) return { rekeyed: false, rows: 0 };
+
+  let rows = 0;
+  const existing = await allRecords();
+  await tx(STORE_RECORDS, "readwrite", (s) => {
+    for (const r of existing) s.delete(r.id);
+  });
+  vault.data = emptyData();
+  for (const kind of KINDS) {
+    for (const record of carried[kind] || []) {
+      await put(kind, record);
+      rows += 1;
+    }
+  }
+  return { rekeyed: true, rows };
+}
+
+/* ---------------- 设置项（加密存储，不参与云同步） ---------------- */
+
+export function getSetting(id, fallback = null) {
+  requireKey();
+  const found = (vault.data.setting || []).find((s) => s.id === id);
+  return found ? clone(found.value ?? null) : clone(fallback);
+}
+
+export async function putSetting(id, value) {
+  requireKey();
+  const existing = (vault.data.setting || []).find((s) => s.id === id);
+  const now = nowIso();
+  const obj = {
+    id,
+    value,
+    created_at: existing?.created_at || now,
+    updated_at: now,
+    deleted_at: null,
+  };
+  await put("setting", obj);
+  return obj;
 }
 
 /* ---------------- 备份 ---------------- */
