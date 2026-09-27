@@ -11,51 +11,58 @@
 
 所以拼图只缺"一次 macOS 上的编译"，用 **GitHub Actions 的 macOS 云编译机**补上：免费、不用你有 Mac、不用开发者账号。
 
-## 三步拿到 ipa（照做即可，全程网页操作）
+## 已经跑通了：不需要你动手
 
-### 第 1 步：建一个 GitHub 仓库
+仓库已经建好并成功编译过一次：
 
-1. 打开 <https://github.com/new>（没有账号就注册一个，免费）；
-2. Repository name 填 `lifebook-ios`；
-3. 选 **Public**（公共仓库才能免费使用 macOS 编译机；仓库里只有 App 源码，**数据库和你的数据在 `data/` 里，已被 .gitignore 排除，不会上传**）；
-4. 直接点 **Create repository**。
+- 仓库：<https://github.com/zxsaqc/lifebook-ios>（Public，里面只有 App 源码；数据在 `data/` 且被 .gitignore 排除，不会上传）
+- 构建历史：<https://github.com/zxsaqc/lifebook-ios/actions>
+- 产物：**桌面上的 `LifeBook.ipa`**（约 85KB，ARM64，iOS 14+）
 
-### 第 2 步：把源码传上去
+### 拿最新版 ipa（两种方式，任选）
 
-1. 桌面上有 `LifeBook-iOS工程.zip`，先解压，得到 `ios` 和 `.github` 两个文件夹；
-2. 在刚建的仓库页面点 **Add file → Upload files**；
-3. 把这两个文件夹**拖进**上传框（拖文件夹，不是拖 zip），等文件列出来；
-4. 点绿色的 **Commit changes**。
+**方式一：一条命令（推荐）**
 
-> 上传完会自动触发一次构建，不用手动点。
+```
+python scripts/build_ipa.py
+```
 
-### 第 3 步：下载 ipa 并安装
+它会自动同步源码 → 推送 → 等云编译跑完 → 把 `LifeBook.ipa` 下载到桌面。全程不用碰网页。
 
-1. 仓库顶部点 **Actions**，会看到一个正在跑的任务；
-2. 等它变绿（一般 3～8 分钟），点进去；
-3. 页面最下面 **Artifacts** 区域 → `LifeBook-unsigned-ipa` → 下载（是个 zip，解压得到 `LifeBook.ipa`）；
-4. 把这个 ipa 弄到手机上：AirDrop 最省事，或存进「文件」App；
-5. 在 iPhone 上用 **TrollStore** 打开这个 ipa 安装；
-6. 打开 LifeBook → 填电脑地址（形如 `http://192.168.1.23:8686`）→ 点「测试连接并使用」。
+**方式二：网页上点**
 
-电脑地址从哪来：电脑上双击桌面图标 **「LifeBook 手机模式」**，那个黑窗口里会打印 `手机访问地址 → http://xxx.xxx.xxx.xxx:8686`，选跟电脑同一 WiFi 的那个。
+1. 打开 <https://github.com/zxsaqc/lifebook-ios/actions>
+2. 点最新的那次运行 → 页面底部 **Artifacts** → `LifeBook-unsigned-ipa`（是个 zip，解压得到 `LifeBook.ipa`）
+3. 想不改代码也重新出包：Actions → Build LifeBook iOS → **Run workflow**
+
+## 安装到 iPhone（巨魔）
+
+1. 把 `LifeBook.ipa` 弄到手机上：AirDrop 最省事，也可以存进「文件」App；
+2. 用 **TrollStore** 打开这个 ipa 安装；
+3. 打开 LifeBook → 填电脑地址（形如 `http://192.168.1.23:8686`）→ 点「测试连接并使用」。
+
+电脑地址从哪来：电脑上双击桌面图标 **「LifeBook 手机模式」**，黑窗口里会打印 `手机访问地址 → http://xxx.xxx.xxx.xxx:8686`，选跟电脑同一 WiFi 的那个。
 
 ## 以后改代码
 
-改 `ios/Sources/*.swift` 后重新上传，`push` 会自动触发构建，Actions 里再下载新版 ipa 覆盖安装即可。
-
-也可以手动触发：Actions → Build LifeBook iOS → **Run workflow**。
+改完 `ios/Sources/*.swift`，跑 `python scripts/build_ipa.py` 即可，新 ipa 会覆盖桌面上的旧文件，手机上覆盖安装。
 
 ## 构建失败了怎么办
 
-把 Actions 里红色的那一步日志（点开复制）发给我，我直接改——CI 日志会把编译错误和出错文件名都列出来。
+把 Actions 里红色的那一步日志发出来（或在仓库目录执行 `gh run view <run-id> --log-failed`），我直接改——CI 日志会把编译错误和出错文件名都列出来。
+
+### 踩过的坑（已修，留档）
+
+1. **工程格式太新**：xcodegen 默认按最新 Xcode 生成（objectVersion 77），云编译机是 Xcode 15.4 打不开 → 在 `project.yml` 里显式写 `options.xcodeVersion: "15.0"`。
+2. **archive 环节卡签名**：改用 `xcodebuild build` + 手工打 `Payload`，绕开签名校验。
+3. **图标丢失**：某些组合下 Asset Catalog 不会编译成 `Assets.car` → 额外把 PNG 拷进 bundle，并在 `Info.plist` 用 `CFBundleIconFiles` 兜底。
 
 ## 工程结构
 
 ```
 ios/
 ├── project.yml                     # xcodegen 描述，CI 用它生成 .xcodeproj
-├── Info.plist                      # xcodegen 自动生成（含 ATS 放行局域网 http）
+├── Info.plist                      # ATS 放行局域网 http + 图标兜底
 ├── Sources/
 │   ├── LifeBookApp.swift           # 入口
 │   ├── AppSettings.swift           # 服务器地址持久化（UserDefaults）
@@ -64,7 +71,8 @@ ios/
 │   ├── SetupView.swift             # 首次连接引导
 │   ├── SettingsSheet.swift         # 改地址 / 断开 / 版本
 │   └── WebShellView.swift          # WKWebView 壳：下拉刷新、Cookie 持久化、失败提示
-└── Resources/Assets.xcassets/      # AppIcon 全尺寸 + 启动背景色
+├── Resources/Assets.xcassets/      # AppIcon 全尺寸 + 启动背景色
+└── Resources/AppIcon.appiconset/   # 兜底：PNG 直接进 bundle
 ```
 
 ## 当前版本的能力边界

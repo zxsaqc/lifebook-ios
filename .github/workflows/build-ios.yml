@@ -70,8 +70,23 @@ jobs:
           rm -rf Payload LifeBook.ipa
           mkdir -p Payload
           cp -R Release-iphoneos/*.app Payload/
-          # ad-hoc 签名：codesign 是 macOS 自带工具，保证 bundle 结构完整可用
-          codesign --force --deep --sign - Payload/*.app || true
+          APP=$(echo Payload/*.app)
+
+          # 图标：不依赖 Asset Catalog（xcodegen 组合下不一定编译成 Assets.car），
+          # 直接把 PNG 拷进 bundle 根，再用 PlistBuddy 写 CFBundleIconFiles。
+          cp ../Resources/AppIcon.appiconset/*.png "$APP/"
+          PB=/usr/libexec/PlistBuddy
+          $PB -c "Add :CFBundleIcons dict" "$APP/Info.plist" 2>/dev/null || true
+          $PB -c "Add :CFBundleIcons:CFBundlePrimaryIcon dict" "$APP/Info.plist" 2>/dev/null || true
+          $PB -c "Add :CFBundleIcons:CFBundlePrimaryIcon:CFBundleIconFiles array" "$APP/Info.plist" 2>/dev/null || true
+          for f in Icon-180 Icon-120 Icon-167 Icon-152 Icon-1024; do
+            $PB -c "Add :CFBundleIcons:CFBundlePrimaryIcon:CFBundleIconFiles: string $f" "$APP/Info.plist" 2>/dev/null || true
+          done
+          echo "--- 图标配置 ---"
+          $PB -c "Print :CFBundleIcons" "$APP/Info.plist" || true
+
+          # ad-hoc 签名必须在改完 bundle 之后做，否则签名会被内容变动作废
+          codesign --force --deep --sign - "$APP" || true
           zip -qry LifeBook.ipa Payload
           ls -lh LifeBook.ipa
 
